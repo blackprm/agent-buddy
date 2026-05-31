@@ -1,0 +1,1631 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyAgent Admin</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; }
+
+      body {
+        background: #09090b;
+        color: #e4e4e7;
+        font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        font-size: 13px;
+      }
+
+      .layout { display: flex; height: 100vh; }
+
+      /* ── Sidebar ── */
+      .sidebar {
+        width: 220px;
+        background: #0c0c0f;
+        border-right: 1px solid #27272a;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .sidebar-header {
+        padding: 14px 16px 10px;
+        border-bottom: 1px solid #27272a;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .sidebar-header h2 { font-size: 14px; font-weight: 600; }
+      .mode-tabs { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #27272a; }
+      .mode-tab {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid #27272a;
+        background: rgba(255,255,255,0.03);
+        color: #a1a1aa;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .mode-tabs { flex-wrap: wrap; }
+      .mode-tab.active { background: rgba(59,130,246,0.14); border-color: #3b82f6; color: #e4e4e7; }
+      .sidebar-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+      .sidebar-item {
+        padding: 8px 16px;
+        cursor: pointer;
+        border-left: 2px solid transparent;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .sidebar-item:hover { background: rgba(255,255,255,0.04); }
+      .sidebar-item.active {
+        background: rgba(59,130,246,0.08);
+        border-left-color: #3b82f6;
+      }
+      .sidebar-item .name { font-weight: 500; }
+      .sidebar-item .desc { color: #71717a; font-size: 11px; margin-top: 2px; }
+      .sidebar-item .meta { color: #52525b; font-size: 10px; margin-top: 3px; }
+      .sidebar-item .price { color: #93c5fd; font-size: 10px; margin-top: 3px; }
+      .sidebar-item .quota { color: #fbbf24; font-size: 10px; margin-top: 3px; }
+      .readonly-pill { color: #f59e0b; border: 1px solid rgba(245,158,11,0.35); border-radius: 999px; padding: 1px 5px; margin-left: 4px; font-size: 10px; }
+      .sidebar-footer {
+        padding: 10px 16px;
+        border-top: 1px solid #27272a;
+        font-size: 11px;
+        color: #71717a;
+      }
+      .sidebar-footer .provider { color: #22c55e; font-weight: 500; }
+
+      /* ── Editor Panel ── */
+      .editor-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+      .editor-toolbar {
+        padding: 8px 16px;
+        background: #0c0c0f;
+        border-bottom: 1px solid #27272a;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .editor-toolbar .title { font-weight: 600; margin-right: auto; }
+      .btn {
+        padding: 5px 12px;
+        border-radius: 6px;
+        border: 1px solid #27272a;
+        background: rgba(255,255,255,0.04);
+        color: #e4e4e7;
+        cursor: pointer;
+        font-size: 12px;
+        transition: background 0.15s;
+      }
+      .btn:hover { background: rgba(255,255,255,0.08); }
+      .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+      .btn-primary:hover { background: #2563eb; }
+      .btn-danger { color: #ef4444; border-color: rgba(239,68,68,0.3); }
+      .btn-danger:hover { background: rgba(239,68,68,0.1); }
+      .editor-wrap { flex: 1; overflow: hidden; position: relative; }
+      #yaml-editor {
+        width: 100%; height: 100%;
+        background: #0c0c0f;
+        color: #e4e4e7;
+        border: none; outline: none;
+        padding: 12px 16px;
+        font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        resize: none;
+        tab-size: 2;
+      }
+      .CodeMirror { height: 100% !important; font-size: 13px; line-height: 1.5; }
+
+      /* ── Structured Resource Forms ── */
+      .model-form,
+      .account-form {
+        display: none;
+        height: 100%;
+        overflow-y: auto;
+        padding: 22px;
+        background:
+          radial-gradient(circle at 18% 0%, rgba(59,130,246,0.08), transparent 34%),
+          #0c0c0f;
+      }
+      .model-form.active,
+      .account-form.active { display: block; }
+      .model-form-inner { max-width: 940px; margin: 0 auto; }
+      .model-form-hero {
+        border: 1px solid #27272a;
+        border-radius: 16px;
+        padding: 18px;
+        background: linear-gradient(135deg, rgba(39,39,42,0.72), rgba(24,24,27,0.86));
+        box-shadow: 0 18px 48px rgba(0,0,0,0.24);
+        margin-bottom: 16px;
+      }
+      .model-form-hero h3 { font-size: 18px; font-weight: 650; margin-bottom: 6px; }
+      .model-form-hero p { color: #a1a1aa; line-height: 1.55; }
+      .model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+      .model-card {
+        border: 1px solid #27272a;
+        border-radius: 14px;
+        padding: 16px;
+        background: rgba(24,24,27,0.78);
+      }
+      .model-card.full { grid-column: 1 / -1; }
+      .model-card-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 650;
+        margin-bottom: 12px;
+      }
+      .model-card-title .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #3b82f6;
+        box-shadow: 0 0 18px rgba(59,130,246,0.75);
+      }
+      .form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .form-field { margin-bottom: 12px; }
+      .form-field:last-child { margin-bottom: 0; }
+      .form-field label {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: #d4d4d8;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .form-field label span { color: #71717a; font-weight: 500; }
+      .form-field input,
+      .form-field select,
+      .form-field textarea,
+      .price-box input {
+        width: 100%;
+        border: 1px solid #27272a;
+        border-radius: 10px;
+        background: #09090b;
+        color: #e4e4e7;
+        padding: 10px 11px;
+        outline: none;
+        font-size: 13px;
+      }
+      .form-field input:focus,
+      .form-field select:focus,
+      .form-field textarea:focus,
+      .price-box input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59,130,246,0.13);
+      }
+      .form-field textarea { min-height: 90px; resize: vertical; font-family: 'Menlo', 'Monaco', 'Consolas', monospace; line-height: 1.5; }
+      .form-field input[readonly] { color: #a1a1aa; background: rgba(9,9,11,0.72); }
+      .form-help { color: #71717a; font-size: 11px; line-height: 1.5; margin-top: 5px; }
+      .field-chip { color:#60a5fa; border:1px solid rgba(96,165,250,.25); border-radius:999px; padding:1px 6px; font-size:10px; }
+      .pricing-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .price-box {
+        border: 1px solid #27272a;
+        border-radius: 12px;
+        padding: 12px;
+        background: rgba(9,9,11,0.62);
+      }
+      .price-box .label { color: #a1a1aa; font-size: 11px; margin-bottom: 7px; }
+      .price-box .unit { color: #71717a; font-size: 10px; margin-top: 6px; }
+      .model-form-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+      .model-form-actions .hint { color: #71717a; font-size: 11px; margin-left: auto; }
+      @media (max-width: 1100px) {
+        .model-grid,
+        .form-row,
+        .pricing-strip { grid-template-columns: 1fr; }
+      }
+
+      /* ── Preview Panel ── */
+      .preview-panel {
+        width: 380px;
+        background: #0c0c0f;
+        border-left: 1px solid #27272a;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .preview-header {
+        padding: 10px 16px;
+        border-bottom: 1px solid #27272a;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .preview-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        color: #a1a1aa;
+      }
+      .preview-content .boundary { color: #eab308; font-weight: 600; }
+      .preview-empty { color: #52525b; font-style: italic; padding: 20px; }
+
+      /* ── Modal ── */
+      .modal-overlay {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0.6);
+        z-index: 100;
+        justify-content: center;
+        align-items: center;
+      }
+      .modal-overlay.active { display: flex; }
+      .modal {
+        background: #18181b;
+        border: 1px solid #27272a;
+        border-radius: 12px;
+        padding: 24px;
+        width: 400px;
+      }
+      .modal h3 { margin-bottom: 16px; }
+      .modal input {
+        width: 100%;
+        padding: 8px 12px;
+        border-radius: 6px;
+        border: 1px solid #27272a;
+        background: #09090b;
+        color: #e4e4e7;
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+      .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+      /* ── Toast ── */
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        padding: 10px 18px;
+        border-radius: 8px;
+        font-size: 12px;
+        z-index: 200;
+        transition: opacity 0.3s;
+      }
+      .toast.success { background: #166534; color: #bbf7d0; }
+      .toast.error { background: #7f1d1d; color: #fecaca; }
+
+      /* Claude Code inspired control plane skin */
+      :root {
+        --cc-bg: #11100d;
+        --cc-panel: rgba(28,25,20,.82);
+        --cc-panel-2: rgba(35,31,24,.92);
+        --cc-line: rgba(230,197,150,.14);
+        --cc-line-hot: rgba(255,154,95,.32);
+        --cc-text: #ede3d2;
+        --cc-muted: #9d8f7d;
+        --cc-faint: #6f6253;
+        --cc-orange: #d97745;
+        --cc-hot: #ff9a5f;
+        --cc-gold: #f0bf6a;
+        --cc-green: #7ad66d;
+        --cc-red: #ff6b5f;
+        --cc-mono: 'JetBrains Mono', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+      }
+      body {
+        background:
+          radial-gradient(circle at 15% 8%, rgba(217,119,69,.22), transparent 27%),
+          radial-gradient(circle at 82% 10%, rgba(240,191,106,.12), transparent 26%),
+          linear-gradient(135deg, #17130e, #0d0d0c 48%, #15120f);
+        color: var(--cc-text);
+        font-family: var(--cc-mono);
+      }
+      body::before {
+        content:''; position:fixed; inset:0; pointer-events:none;
+        background-image: linear-gradient(rgba(236,158,91,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(236,158,91,.032) 1px, transparent 1px);
+        background-size: 38px 38px;
+        mask-image: radial-gradient(circle at 55% 38%, black, transparent 78%);
+        animation: adminGrid 26s linear infinite;
+      }
+      @keyframes adminGrid { from { background-position: 0 0; } to { background-position: 76px 38px; } }
+      @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .42; transform: scale(.84); } }
+      .layout { position: relative; z-index: 1; }
+      .sidebar {
+        width: 260px;
+        background: linear-gradient(180deg, rgba(29,25,19,.94), rgba(17,16,13,.84));
+        border-right: 1px solid var(--cc-line);
+        box-shadow: 24px 0 70px rgba(0,0,0,.32);
+        backdrop-filter: blur(22px);
+      }
+      .sidebar-brand {
+        padding: 16px 16px 14px;
+        border-bottom: 1px solid var(--cc-line);
+      }
+      .brand-row { display:flex; align-items:center; gap:10px; }
+      .brand-logo {
+        width: 34px; height: 34px; border-radius: 10px; display:grid; place-items:center;
+        color:#130f0b; font-weight:900;
+        background: conic-gradient(from 210deg, #ffb477, var(--cc-orange), var(--cc-gold), #ffb477);
+        box-shadow: 0 0 32px rgba(217,119,69,.42), inset 0 1px 0 rgba(255,255,255,.45);
+        animation: adminLogo 3s ease-in-out infinite;
+      }
+      @keyframes adminLogo { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-1px) rotate(-2deg); } }
+      .brand-name { font-weight:850; letter-spacing:-.03em; font-size:15px; }
+      .brand-sub { color:var(--cc-muted); font-size:10px; letter-spacing:.12em; text-transform:uppercase; }
+      .brand-status { display:flex; gap:7px; margin-top:12px; flex-wrap:wrap; }
+      .brand-chip { font-size:10px; color:var(--cc-muted); padding:3px 7px; border:1px solid rgba(236,158,91,.18); border-radius:999px; background:rgba(255,255,255,.035); }
+      .brand-chip.live { color:var(--cc-gold); }
+      .brand-chip.live::before { content:'●'; color:var(--cc-green); margin-right:5px; animation:pulse 1.4s ease-in-out infinite; }
+      .sidebar-header, .mode-tabs, .sidebar-footer { border-color: var(--cc-line); background: transparent; }
+      .sidebar-header h2 { color: var(--cc-faint); text-transform: uppercase; letter-spacing: .14em; font-size: 10px; }
+      .mode-tab, .btn {
+        border-color: rgba(230,197,150,.14);
+        background: rgba(255,255,255,.035);
+        color: var(--cc-muted);
+        border-radius: 9px;
+        font-family: var(--cc-mono);
+        transition: transform .16s ease, border-color .16s ease, background .16s ease, color .16s ease;
+      }
+      .mode-tab:hover, .btn:hover { transform: translateY(-1px); background: rgba(255,255,255,.065); border-color: rgba(255,154,95,.24); }
+      .mode-tab.active, .btn-primary {
+        background: linear-gradient(180deg, rgba(255,154,95,.22), rgba(217,119,69,.12));
+        border-color: rgba(255,154,95,.38);
+        color: #ffd1ad;
+        box-shadow: 0 0 24px rgba(217,119,69,.10);
+      }
+      .btn-danger { color: #ffb0a9; border-color: rgba(255,107,95,.32); }
+      .sidebar-item { border-left-width: 2px; border-radius: 0 12px 12px 0; margin: 3px 8px 3px 0; }
+      .sidebar-item:hover { background: rgba(255,255,255,.055); }
+      .sidebar-item.active { background: linear-gradient(90deg, rgba(217,119,69,.18), rgba(255,255,255,.03)); border-left-color: var(--cc-hot); }
+      .sidebar-item .name, .editor-toolbar .title, .preview-header, .model-form-hero h3 { color: var(--cc-text); }
+      .sidebar-item .desc, .sidebar-item .meta, .preview-content, .form-help, .model-form-hero p { color: var(--cc-muted); }
+      .sidebar-item .price, .sidebar-item .quota, .sidebar-footer .provider, .field-chip { color: var(--cc-gold); }
+      .editor-panel, .preview-panel, .editor-toolbar { background: transparent; border-color: var(--cc-line); }
+      .editor-toolbar {
+        margin: 14px 14px 0;
+        border: 1px solid var(--cc-line);
+        border-radius: 16px;
+        background: rgba(23,20,16,.62);
+        backdrop-filter: blur(18px);
+      }
+      .editor-wrap { margin: 12px 14px 14px; border:1px solid rgba(230,197,150,.08); border-radius:18px; overflow:hidden; background:rgba(12,11,9,.46); }
+      #yaml-editor, .CodeMirror, .model-form, .account-form { background: transparent; color: var(--cc-text); }
+      .model-form, .account-form { background: radial-gradient(circle at 18% 0%, rgba(217,119,69,.10), transparent 34%), rgba(12,11,9,.32); }
+      .model-form-hero, .model-card, .price-box, .modal {
+        border-color: var(--cc-line);
+        background: linear-gradient(135deg, rgba(35,31,24,.82), rgba(18,16,13,.72));
+        box-shadow: 0 18px 54px rgba(0,0,0,.24);
+      }
+      .model-card-title .dot { background: var(--cc-hot); box-shadow: 0 0 20px rgba(255,154,95,.72); }
+      .form-field input, .form-field select, .form-field textarea, .price-box input, .modal input {
+        background: rgba(7,6,5,.55);
+        border-color: rgba(230,197,150,.14);
+        color: var(--cc-text);
+      }
+      .form-field input:focus, .form-field select:focus, .form-field textarea:focus, .price-box input:focus, .modal input:focus {
+        border-color: rgba(255,154,95,.46);
+        box-shadow: 0 0 0 3px rgba(217,119,69,.14);
+      }
+      .preview-panel { border-left-color: var(--cc-line); background: rgba(18,16,13,.62); }
+      .preview-header { border-color: var(--cc-line); }
+      .preview-content .boundary { color: var(--cc-gold); }
+      .toast.success { background: rgba(22,101,52,.94); }
+      .toast.error { background: rgba(127,29,29,.94); }
+
+      /* Claude Code exact-ish admin skin: flat, quiet, terminal-like */
+      :root {
+        --cc-bg: #0b0b0b;
+        --cc-panel: #101010;
+        --cc-panel-2: #141414;
+        --cc-line: #242424;
+        --cc-line-hot: #333333;
+        --cc-text: #d6d3ce;
+        --cc-muted: #8a8883;
+        --cc-faint: #5f5d58;
+        --cc-orange: #d97745;
+        --cc-hot: #d97745;
+        --cc-gold: #c69058;
+        --cc-green: #6a9955;
+        --cc-red: #d16969;
+      }
+      body {
+        background: var(--cc-bg) !important;
+        color: var(--cc-text);
+      }
+      body::before,
+      .sidebar-brand { display: none !important; }
+      * { animation: none !important; transition-duration: 0ms !important; }
+      .sidebar {
+        width: 220px;
+        background: #101010;
+        border-right: 1px solid #242424;
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+      .sidebar-header {
+        padding: 12px 14px 8px;
+        border-bottom: 1px solid #242424;
+      }
+      .sidebar-header h2 {
+        color: #7c7a74;
+        text-transform: none;
+        letter-spacing: 0.02em;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .mode-tabs {
+        padding: 8px 10px;
+        gap: 5px;
+        border-bottom: 1px solid #242424;
+      }
+      .mode-tab,
+      .btn {
+        background: #171717;
+        color: #aaa7a0;
+        border: 1px solid #2c2c2c;
+        border-radius: 5px;
+        box-shadow: none;
+        transform: none !important;
+      }
+      .mode-tab:hover,
+      .btn:hover { background: #202020; border-color: #333333; color: #d6d3ce; }
+      .mode-tab.active,
+      .btn-primary {
+        background: #1b1b1b;
+        border-color: #3a332d;
+        color: #d9a36c;
+        box-shadow: none;
+      }
+      .btn-danger { color: #d16969; border-color: #4a2b2b; }
+      .sidebar-list { padding: 6px 0; }
+      .sidebar-item {
+        padding: 8px 14px;
+        margin: 0;
+        border-radius: 0;
+        border-left: 2px solid transparent;
+      }
+      .sidebar-item:hover { background: #171717; }
+      .sidebar-item.active {
+        background: #1b1b1b;
+        border-left-color: #d97745;
+      }
+      .sidebar-item .name,
+      .editor-toolbar .title,
+      .preview-header,
+      .model-form-hero h3 { color: #d6d3ce; }
+      .sidebar-item .desc,
+      .sidebar-item .meta,
+      .preview-content,
+      .form-help,
+      .model-form-hero p { color: #8a8883; }
+      .sidebar-item .price,
+      .sidebar-item .quota,
+      .sidebar-footer .provider,
+      .field-chip { color: #c69058; }
+      .sidebar-footer { border-top: 1px solid #242424; background: #101010; }
+
+      .editor-panel,
+      .preview-panel,
+      .editor-toolbar { background: #0b0b0b; border-color: #242424; }
+      .editor-toolbar {
+        margin: 0;
+        padding: 8px 14px;
+        border: none;
+        border-bottom: 1px solid #242424;
+        border-radius: 0;
+        background: #101010;
+        backdrop-filter: none;
+      }
+      .editor-wrap {
+        margin: 0;
+        border: none;
+        border-radius: 0;
+        background: #0b0b0b;
+      }
+      #yaml-editor,
+      .CodeMirror,
+      .model-form,
+      .account-form {
+        background: #0b0b0b !important;
+        color: #d6d3ce;
+      }
+      .model-form,
+      .account-form { background-image: none !important; }
+      .model-form-hero,
+      .model-card,
+      .price-box,
+      .modal {
+        background: #101010;
+        border: 1px solid #242424;
+        box-shadow: none;
+        border-radius: 8px;
+      }
+      .model-card-title .dot {
+        background: #d97745;
+        box-shadow: none;
+      }
+      .form-field label { color: #d6d3ce; }
+      .form-field label span { color: #7c7a74; }
+      .form-field input,
+      .form-field select,
+      .form-field textarea,
+      .price-box input,
+      .modal input {
+        background: #0b0b0b;
+        border: 1px solid #2c2c2c;
+        color: #d6d3ce;
+        border-radius: 5px;
+      }
+      .form-field input:focus,
+      .form-field select:focus,
+      .form-field textarea:focus,
+      .price-box input:focus,
+      .modal input:focus {
+        border-color: #4a3a2c;
+        box-shadow: none;
+      }
+      .preview-panel {
+        background: #101010;
+        border-left: 1px solid #242424;
+      }
+      .preview-header { border-bottom: 1px solid #242424; }
+      .preview-content .boundary { color: #c69058; }
+      .preview-empty { color: #5f5d58; }
+      .modal-overlay { background: rgba(0,0,0,.62); }
+      .toast {
+        border-radius: 5px;
+        box-shadow: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-brand">
+          <div class="brand-row">
+            <div class="brand-logo">✦</div>
+            <div>
+              <div class="brand-name">MyAgent Control</div>
+              <div class="brand-sub">Claude Code admin plane</div>
+            </div>
+          </div>
+          <div class="brand-status">
+            <span class="brand-chip live">admin</span>
+            <span class="brand-chip">prompts</span>
+            <span class="brand-chip">quota</span>
+          </div>
+        </div>
+        <div class="sidebar-header">
+          <h2 id="sidebar-title">Prompts</h2>
+          <button class="btn" id="btn-new" title="New">+</button>
+        </div>
+        <div class="mode-tabs">
+          <button class="mode-tab active" id="tab-prompts">Prompts</button>
+          <button class="mode-tab" id="tab-skills">Skills</button>
+          <button class="mode-tab" id="tab-models">Models</button>
+          <button class="mode-tab" id="tab-users">Users</button>
+          <button class="mode-tab" id="tab-orgs">Orgs</button>
+        </div>
+        <div class="sidebar-list" id="template-list"></div>
+        <div class="sidebar-footer" id="runtime-info">
+          Loading...
+        </div>
+      </div>
+
+      <!-- Editor -->
+      <div class="editor-panel">
+        <div class="editor-toolbar">
+          <div class="title" id="editor-title">No item selected</div>
+          <button class="btn" id="btn-preview">Preview</button>
+          <button class="btn btn-primary" id="btn-save">Save</button>
+          <button class="btn btn-danger" id="btn-delete">Delete</button>
+          <button class="btn" id="btn-logout">Logout</button>
+        </div>
+        <div class="editor-wrap">
+          <textarea id="yaml-editor" spellcheck="false"># Select an item from the sidebar</textarea>
+          <div class="model-form" id="model-form">
+            <div class="model-form-inner">
+              <div class="model-form-hero">
+                <h3>模型计费配置</h3>
+                <p>配置每百万 token 的计费价格。缓存命中读取与缓存写入会独立计价，不再混入普通 input token。</p>
+              </div>
+
+              <div class="model-grid">
+                <div class="model-card full">
+                  <div class="model-card-title"><span class="dot"></span>基础信息</div>
+                  <div class="form-row">
+                    <div class="form-field">
+                      <label for="model-id">模型 ID <span>不可在编辑时改名</span></label>
+                      <input id="model-id" readonly placeholder="claude-sonnet-4-6" />
+                    </div>
+                    <div class="form-field">
+                      <label for="model-display-name">展示名称 <span>侧边栏展示名</span></label>
+                      <input id="model-display-name" placeholder="Claude Sonnet 4.6" />
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-field">
+                      <label for="model-provider">模型供应商 <span>枚举值</span></label>
+                      <select id="model-provider">
+                        <option value="">未指定</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="ark">火山 Ark</option>
+                        <option value="fake">调试 Fake</option>
+                        <option value="gateway">自定义网关</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="model-currency">计费币种 <span>枚举值</span></label>
+                      <select id="model-currency">
+                        <option value="CNY">CNY</option>
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                        <option value="JPY">JPY</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="model-card full">
+                  <div class="model-card-title"><span class="dot"></span>每百万 Token 价格</div>
+                  <div class="pricing-strip">
+                    <div class="price-box">
+                      <div class="label">输入价格</div>
+                      <input id="model-input-price" type="number" min="0" step="0.000001" placeholder="3.0" />
+                      <div class="unit">普通输入 token</div>
+                    </div>
+                    <div class="price-box">
+                      <div class="label">输出价格</div>
+                      <input id="model-output-price" type="number" min="0" step="0.000001" placeholder="15.0" />
+                      <div class="unit">模型输出 token</div>
+                    </div>
+                    <div class="price-box">
+                      <div class="label">缓存读取价格</div>
+                      <input id="model-cache-read-price" type="number" min="0" step="0.000001" placeholder="0.3" />
+                      <div class="unit">缓存命中读取 token</div>
+                    </div>
+                    <div class="price-box">
+                      <div class="label">缓存写入价格</div>
+                      <input id="model-cache-write-price" type="number" min="0" step="0.000001" placeholder="3.75" />
+                      <div class="unit">缓存创建 / 写入 token</div>
+                    </div>
+                  </div>
+                  <div class="model-form-actions">
+                    <button class="btn" id="btn-cache-defaults" type="button">使用 Claude 缓存比例</button>
+                    <button class="btn" id="btn-cache-zero" type="button">缓存不计费</button>
+                    <div class="hint">Claude 常用比例：read = input × 10%，write = input × 125%</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="account-form" id="account-form">
+            <div class="model-form-inner">
+              <div class="model-form-hero">
+                <h3 id="account-form-title">账号配置</h3>
+                <p id="account-form-desc">用结构化表单管理用户、组织和额度策略。这里不会要求你手写 JSON。</p>
+              </div>
+              <div class="model-grid" id="account-form-fields"></div>
+              <div class="model-form-actions">
+                <button class="btn" id="btn-user-quota" type="button" style="display:none;">设置额度…</button>
+                <div class="hint" id="account-form-hint">保存后立即成为服务端 quota / billing 归因的 source of truth。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div class="preview-panel">
+        <div class="preview-header" id="preview-title">Rendered Preview</div>
+        <div class="preview-content" id="preview-content">
+          <div class="preview-empty">Select an item and click Preview</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- New Template Modal -->
+    <div class="modal-overlay" id="modal-new">
+      <div class="modal">
+        <h3 id="modal-title">New Template</h3>
+        <input id="new-name" placeholder="Name (e.g. my-agent)" />
+        <input id="new-desc" placeholder="Description" />
+        <div class="actions">
+          <button class="btn" id="modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="modal-create">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- User Quota Modal -->
+    <div class="modal-overlay" id="modal-quota">
+      <div class="modal" style="width:min(860px, calc(100vw - 36px)); max-height:calc(100vh - 54px); overflow:auto;">
+        <h3>用户额度设置</h3>
+        <div class="form-help" id="quota-modal-subtitle" style="margin:-8px 0 16px;">按日 / 周 / 月设置用户级限额；0 表示无限制。</div>
+        <div class="model-grid">
+          <div class="model-card full">
+            <div class="model-card-title"><span class="dot"></span>策略开关</div>
+            <div class="form-row">
+              <div class="form-field">
+                <label>是否启用 <span>关闭后该用户不使用用户级额度策略</span></label>
+                <select id="quota-enabled"><option value="true">启用</option><option value="false">停用</option></select>
+              </div>
+              <div class="form-field">
+                <label>策略名称 <span>自动关联当前用户</span></label>
+                <input id="quota-name" placeholder="Alice quota" />
+              </div>
+            </div>
+          </div>
+          <div class="model-card">
+            <div class="model-card-title"><span class="dot"></span>日额度</div>
+            <div class="form-field"><label>每日请求数</label><input id="quota-day-requests" type="number" min="0" /></div>
+            <div class="form-field"><label>每日 Token</label><input id="quota-day-tokens" type="number" min="0" /></div>
+            <div class="form-field"><label>每日成本</label><input id="quota-day-cost" type="number" min="0" step="0.000001" /></div>
+          </div>
+          <div class="model-card">
+            <div class="model-card-title"><span class="dot"></span>周额度</div>
+            <div class="form-field"><label>每周请求数</label><input id="quota-week-requests" type="number" min="0" /></div>
+            <div class="form-field"><label>每周 Token</label><input id="quota-week-tokens" type="number" min="0" /></div>
+            <div class="form-field"><label>每周成本</label><input id="quota-week-cost" type="number" min="0" step="0.000001" /></div>
+          </div>
+          <div class="model-card full">
+            <div class="model-card-title"><span class="dot"></span>月额度</div>
+            <div class="form-row">
+              <div class="form-field"><label>每月请求数</label><input id="quota-month-requests" type="number" min="0" /></div>
+              <div class="form-field"><label>每月 Token</label><input id="quota-month-tokens" type="number" min="0" /></div>
+            </div>
+            <div class="form-field"><label>每月成本</label><input id="quota-month-cost" type="number" min="0" step="0.000001" /></div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="quota-modal-cancel">取消</button>
+          <button class="btn btn-primary" id="quota-modal-apply">应用额度</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        // ── Editor abstraction: CodeMirror if available, plain textarea fallback ──
+        var textarea = document.getElementById('yaml-editor');
+        var modelForm = document.getElementById('model-form');
+        var accountForm = document.getElementById('account-form');
+        var accountFields = document.getElementById('account-form-fields');
+        var editor = null;
+        var cmLoaded = false;
+
+        var modelFields = {
+          model_id: document.getElementById('model-id'),
+          display_name: document.getElementById('model-display-name'),
+          provider: document.getElementById('model-provider'),
+          currency: document.getElementById('model-currency'),
+          input_per_million: document.getElementById('model-input-price'),
+          output_per_million: document.getElementById('model-output-price'),
+          cache_read_per_million: document.getElementById('model-cache-read-price'),
+          cache_write_per_million: document.getElementById('model-cache-write-price'),
+        };
+
+        function getEditorValue() {
+          return editor ? editor.getValue() : textarea.value;
+        }
+        function setEditorValue(v) {
+          if (editor) { editor.setValue(v); editor.clearHistory(); }
+          else { textarea.value = v; }
+        }
+        function onEditorChange(fn) {
+          if (editor) editor.on('change', fn);
+          else textarea.addEventListener('input', fn);
+        }
+        function setModelFormVisible(visible) {
+          modelForm.classList.toggle('active', visible);
+          syncEditorVisibility();
+        }
+        function setAccountFormVisible(visible) {
+          accountForm.classList.toggle('active', visible);
+          syncEditorVisibility();
+        }
+        function syncEditorVisibility() {
+          var formVisible = modelForm.classList.contains('active') || accountForm.classList.contains('active');
+          if (editor) editor.getWrapperElement().style.display = formVisible ? 'none' : 'block';
+          else textarea.style.display = formVisible ? 'none' : 'block';
+        }
+
+        // Try loading CodeMirror dynamically
+        function loadScript(src, onload, onerr) {
+          var s = document.createElement('script');
+          s.src = src;
+          s.onload = onload;
+          s.onerror = onerr;
+          document.head.appendChild(s);
+        }
+
+        function initCodeMirror() {
+          if (typeof CodeMirror === 'undefined') return;
+          var val = textarea.value;
+          textarea.style.display = 'none';
+          editor = CodeMirror.fromTextArea(textarea, {
+            mode: 'yaml',
+            theme: 'material-darker',
+            lineNumbers: true,
+            tabSize: 2,
+            indentWithTabs: false,
+          });
+          editor.setValue(val || '# Select a template from the sidebar');
+          editor.clearHistory();
+          setModelFormVisible(resourceType === 'models');
+          setAccountFormVisible(isAccountFormResource());
+          if (modified) modified = true; // preserve flag
+        }
+
+        // Load CodeMirror CSS
+        var cmCss = document.createElement('link');
+        cmCss.rel = 'stylesheet';
+        cmCss.href = 'https://cdn.jsdelivr.net/npm/codemirror@5/codemirror.min.css';
+        document.head.appendChild(cmCss);
+        var cmTheme = document.createElement('link');
+        cmTheme.rel = 'stylesheet';
+        cmTheme.href = 'https://cdn.jsdelivr.net/npm/codemirror@5/theme/material-darker.min.css';
+        document.head.appendChild(cmTheme);
+
+        // Load CodeMirror JS
+        loadScript('https://cdn.jsdelivr.net/npm/codemirror@5/codemirror.min.js', function () {
+          loadScript('https://cdn.jsdelivr.net/npm/codemirror@5/mode/yaml/yaml.min.js', function () {
+            initCodeMirror();
+          });
+        });
+
+        var resourceType = 'prompts';
+        var currentName = null;
+        var modified = false;
+        var currentUserQuotaDraft = null;
+
+        onEditorChange(function () { modified = true; });
+        Object.keys(modelFields).forEach(function (key) {
+          modelFields[key].addEventListener('input', function () { if (resourceType === 'models') modified = true; });
+          modelFields[key].addEventListener('change', function () { if (resourceType === 'models') modified = true; });
+        });
+
+        document.getElementById('btn-cache-defaults').onclick = function () {
+          var input = Number(modelFields.input_per_million.value || 0);
+          if (!Number.isFinite(input) || input < 0) return toast('输入价格必须是非负数字', 'error');
+          modelFields.cache_read_per_million.value = Number((input * 0.1).toFixed(6));
+          modelFields.cache_write_per_million.value = Number((input * 1.25).toFixed(6));
+          modified = true;
+        };
+        document.getElementById('btn-cache-zero').onclick = function () {
+          modelFields.cache_read_per_million.value = 0;
+          modelFields.cache_write_per_million.value = 0;
+          modified = true;
+        };
+
+        // ── API helpers ──
+
+        function api(method, path, body, contentType) {
+          var opts = { method: method, headers: {} };
+          if (body !== undefined) {
+            opts.headers['Content-Type'] = contentType || 'application/json';
+            opts.body = typeof body === 'string' ? body : JSON.stringify(body);
+          }
+          return fetch('/admin/api' + path, opts).then(function (r) {
+            if (r.status === 401) {
+              location.href = '/admin/login';
+              throw new Error('Admin authentication required');
+            }
+            if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || r.statusText); });
+            var ct = r.headers.get('content-type') || '';
+            if (ct.startsWith('text/')) return r.text();
+            return r.json();
+          });
+        }
+
+        function toast(msg, type) {
+          var el = document.createElement('div');
+          el.className = 'toast ' + (type || 'success');
+          el.textContent = msg;
+          document.body.appendChild(el);
+          setTimeout(function () { el.style.opacity = '0'; }, 2000);
+          setTimeout(function () { el.remove(); }, 2500);
+        }
+
+        function esc(s) {
+          var d = document.createElement('div');
+          d.textContent = s === undefined || s === null ? '' : String(s);
+          return d.innerHTML;
+        }
+
+        function endpointBase() {
+          if (resourceType === 'skills') return '/skills';
+          if (resourceType === 'models') return '/models';
+          if (resourceType === 'users') return '/users';
+          if (resourceType === 'orgs') return '/organizations';
+          if (resourceType === 'quota') return '/quota/policies';
+          return '/prompts';
+        }
+        function resourceLabel() {
+          if (resourceType === 'skills') return 'Skill';
+          if (resourceType === 'models') return 'Model';
+          if (resourceType === 'users') return 'User';
+          if (resourceType === 'orgs') return 'Organization';
+          if (resourceType === 'quota') return 'Quota Policy';
+          return 'Template';
+        }
+        function emptyEditorText() {
+          if (resourceType === 'skills') return '# Select a skill from the sidebar\n\n# Skill files are full SKILL.md files with YAML frontmatter.';
+          if (resourceType === 'models') return '';
+          if (resourceType === 'users') return '{\n  "id": "user-001",\n  "account_uuid": null,\n  "email": "user@example.com",\n  "name": "User Name",\n  "subscription_type": "pro",\n  "rate_limit_tier": "default"\n}';
+          if (resourceType === 'orgs') return '{\n  "id": "org-001",\n  "organization_uuid": null,\n  "name": "Team Name",\n  "billing_type": "local"\n}';
+          if (resourceType === 'quota') return '{\n  "scope_type": "user",\n  "scope_id": "user-001",\n  "name": "User quota",\n  "max_requests_per_day": 100,\n  "max_tokens_per_day": 1000000,\n  "max_cost_per_day": 0\n}';
+          return '# Select a template from the sidebar';
+        }
+
+        function jsonPretty(obj) {
+          return JSON.stringify(obj || {}, null, 2);
+        }
+
+        function parseJsonEditor() {
+          try {
+            var data = JSON.parse(getEditorValue());
+            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('JSON must be an object');
+            return data;
+          } catch (e) {
+            throw new Error('JSON 格式错误：' + e.message);
+          }
+        }
+
+        function quotaKey(policy) {
+          if (!policy) return '';
+          return policy.scope_type === 'default' ? 'default' : (policy.scope_type + ':' + (policy.scope_id || ''));
+        }
+
+        function itemNameFor(t) {
+          if (resourceType === 'models') return t.model_id;
+          if (resourceType === 'users' || resourceType === 'orgs') return t.id;
+          if (resourceType === 'quota') return quotaKey(t);
+          return t.name;
+        }
+
+        function pathForItem(name) {
+          if (resourceType === 'quota') {
+            if (name === 'default') return '/quota/policies/default';
+            var parts = name.split(':');
+            return '/quota/policies/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts.slice(1).join(':'));
+          }
+          return endpointBase() + '/' + encodeURIComponent(name) + (resourceType === 'models' || resourceType === 'users' || resourceType === 'orgs' ? '' : '?raw=true');
+        }
+
+        function isJsonResource() {
+          return resourceType === 'users' || resourceType === 'orgs' || resourceType === 'quota';
+        }
+
+        function isAccountFormResource() {
+          return resourceType === 'users' || resourceType === 'orgs' || resourceType === 'quota';
+        }
+
+        var accountSchemas = {
+          users: {
+            title: '用户账号',
+            desc: '管理可登录终端的账号上下文。account UUID 对齐 Claude Code 的 accountUuid，用于身份和额度归因。',
+            cards: [
+              { title: '身份', fields: [
+                { key: 'id', label: '用户 ID', hint: '登录页填写的 user_id', placeholder: 'alice', readonlyExisting: true, required: true },
+                { key: 'account_uuid', label: 'Account UUID', hint: '留空自动生成', placeholder: '自动生成 UUID' },
+              ]},
+              { title: '资料', fields: [
+                { key: 'name', label: '姓名', placeholder: 'Alice' },
+                { key: 'email', label: '邮箱', placeholder: 'alice@example.com' },
+                { key: 'status', label: '状态', type: 'select', options: ['active', 'disabled'] },
+                { key: 'subscription_type', label: '订阅类型', type: 'select', options: ['local', 'api', 'pro', 'max', 'team', 'enterprise'] },
+                { key: 'rate_limit_tier', label: 'Rate Limit Tier', placeholder: 'default' },
+              ]},
+              { title: '登录口令', full: true, fields: [
+                { key: 'password', label: '设置 / 重置用户口令', type: 'password', hint: '留空表示不修改；至少 6 位', placeholder: '输入新口令' },
+              ]},
+              { title: '扩展属性', full: true, fields: [
+                { key: 'metadata', label: 'Metadata', type: 'metadata', hint: '可选 JSON，保存业务扩展字段' },
+              ]},
+            ],
+          },
+          orgs: {
+            title: '组织',
+            desc: '组织是 quota 和 billing 的租户边界。organization UUID 对齐 Claude Code 的 organizationUuid。',
+            cards: [
+              { title: '组织身份', fields: [
+                { key: 'id', label: '组织 ID', hint: '登录页填写的 org_id', placeholder: 'team-a', readonlyExisting: true, required: true },
+                { key: 'organization_uuid', label: 'Organization UUID', hint: '留空自动生成', placeholder: '自动生成 UUID' },
+              ]},
+              { title: '组织资料', fields: [
+                { key: 'name', label: '组织名称', placeholder: 'Team A' },
+                { key: 'billing_type', label: 'Billing Type', type: 'select', options: ['local', 'api', 'stripe_subscription', 'stripe_subscription_contracted', 'apple_subscription', 'google_play_subscription'] },
+                { key: 'status', label: '状态', type: 'select', options: ['active', 'disabled'] },
+              ]},
+              { title: '扩展属性', full: true, fields: [
+                { key: 'metadata', label: 'Metadata', type: 'metadata', hint: '可选 JSON，保存租户扩展字段' },
+              ]},
+            ],
+          },
+          quota: {
+            title: '额度策略',
+            desc: '服务端 quota source of truth。0 表示无限制；请求前 preflight，调用后累计 counter。',
+            cards: [
+              { title: '作用范围', fields: [
+                { key: 'scope_type', label: 'Scope Type', type: 'select', options: ['default', 'user', 'org'], required: true },
+                { key: 'scope_id', label: 'Scope ID', hint: 'default 策略留空；user/org 策略填写对应 ID', placeholder: 'alice / team-a' },
+                { key: 'name', label: '策略名称', placeholder: 'Alice daily quota' },
+                { key: 'enabled', label: '是否启用', type: 'bool' },
+              ]},
+              { title: '日额度', fields: [
+                { key: 'max_requests_per_day', label: '每日请求数', type: 'number', placeholder: '100' },
+                { key: 'max_tokens_per_day', label: '每日 Token', type: 'number', placeholder: '1000000' },
+                { key: 'max_cost_per_day', label: '每日成本', type: 'number', step: '0.000001', placeholder: '0' },
+              ]},
+              { title: '周额度', fields: [
+                { key: 'max_requests_per_week', label: '每周请求数', type: 'number', placeholder: '700' },
+                { key: 'max_tokens_per_week', label: '每周 Token', type: 'number', placeholder: '7000000' },
+                { key: 'max_cost_per_week', label: '每周成本', type: 'number', step: '0.000001', placeholder: '0' },
+              ]},
+              { title: '月额度', fields: [
+                { key: 'max_requests_per_month', label: '每月请求数', type: 'number', placeholder: '3000' },
+                { key: 'max_tokens_per_month', label: '每月 Token', type: 'number', placeholder: '30000000' },
+                { key: 'max_cost_per_month', label: '每月成本', type: 'number', step: '0.000001', placeholder: '0' },
+              ]},
+              { title: '扩展属性', full: true, fields: [
+                { key: 'metadata', label: 'Metadata', type: 'metadata', hint: '可选 JSON，保存策略说明、来源或外部订单 ID' },
+              ]},
+            ],
+          },
+        };
+
+        function defaultAccountData() {
+          if (resourceType === 'users') return {
+            id: '', account_uuid: '', email: '', name: '', status: 'active', subscription_type: 'local', rate_limit_tier: 'default', metadata: {},
+            password: '',
+            quota_enabled: true,
+            quota_max_requests_per_day: 0, quota_max_tokens_per_day: 0, quota_max_cost_per_day: 0,
+            quota_max_requests_per_week: 0, quota_max_tokens_per_week: 0, quota_max_cost_per_week: 0,
+            quota_max_requests_per_month: 0, quota_max_tokens_per_month: 0, quota_max_cost_per_month: 0,
+          };
+          if (resourceType === 'orgs') return { id: '', organization_uuid: '', name: '', billing_type: 'local', status: 'active', metadata: {} };
+          if (resourceType === 'quota') return {
+            scope_type: 'user', scope_id: '', name: '', enabled: true,
+            max_requests_per_day: 0, max_tokens_per_day: 0, max_cost_per_day: 0,
+            max_requests_per_week: 0, max_tokens_per_week: 0, max_cost_per_week: 0,
+            max_requests_per_month: 0, max_tokens_per_month: 0, max_cost_per_month: 0,
+            metadata: {},
+          };
+          return {};
+        }
+
+        function flattenUserQuotaPolicy(user) {
+          var data = Object.assign({}, user || {});
+          var policy = data.quota_policy || {};
+          data.quota_enabled = policy.enabled !== false;
+          ['max_requests_per_day', 'max_tokens_per_day', 'max_cost_per_day', 'max_requests_per_week', 'max_tokens_per_week', 'max_cost_per_week', 'max_requests_per_month', 'max_tokens_per_month', 'max_cost_per_month'].forEach(function (key) {
+            data['quota_' + key] = policy[key] || 0;
+          });
+          return data;
+        }
+
+        function defaultUserQuotaPolicy(user) {
+          user = user || {};
+          var userId = user.id || currentName || '';
+          var display = user.name || userId || 'User';
+          return {
+            scope_type: 'user',
+            scope_id: userId,
+            name: display + ' quota',
+            enabled: true,
+            max_requests_per_day: 0,
+            max_tokens_per_day: 0,
+            max_cost_per_day: 0,
+            max_requests_per_week: 0,
+            max_tokens_per_week: 0,
+            max_cost_per_week: 0,
+            max_requests_per_month: 0,
+            max_tokens_per_month: 0,
+            max_cost_per_month: 0,
+            metadata: { source: 'user-form' },
+          };
+        }
+
+        function quotaDraftFromUser(user) {
+          return Object.assign(defaultUserQuotaPolicy(user), (user && user.quota_policy) || {});
+        }
+
+        function setAccountFormValue(data) {
+          data = resourceType === 'users' ? flattenUserQuotaPolicy(data) : data;
+          data = Object.assign(defaultAccountData(), data || {});
+          if (resourceType === 'users') currentUserQuotaDraft = quotaDraftFromUser(data);
+          var schema = accountSchemas[resourceType];
+          if (!schema) return;
+          document.getElementById('account-form-title').textContent = schema.title;
+          document.getElementById('account-form-desc').textContent = schema.desc;
+          accountFields.innerHTML = '';
+          schema.cards.forEach(function (card) {
+            var cardEl = document.createElement('div');
+            cardEl.className = 'model-card' + (card.full ? ' full' : '');
+            cardEl.innerHTML = '<div class="model-card-title"><span class="dot"></span>' + esc(card.title) + '</div>';
+            card.fields.forEach(function (field) { cardEl.appendChild(renderAccountField(field, data[field.key])); });
+            accountFields.appendChild(cardEl);
+          });
+        }
+
+        function renderAccountField(field, value) {
+          var wrap = document.createElement('div');
+          wrap.className = 'form-field';
+          var label = document.createElement('label');
+          label.innerHTML = esc(field.label) + (field.required ? ' <span class="field-chip">required</span>' : '') + (field.hint ? '<span>' + esc(field.hint) + '</span>' : '');
+          wrap.appendChild(label);
+          var input;
+          if (field.type === 'select' || field.type === 'bool') {
+            input = document.createElement('select');
+            var options = field.type === 'bool' ? [{ value: 'true', label: '启用' }, { value: 'false', label: '停用' }] : (field.options || []).map(function (x) { return { value: x, label: x }; });
+            options.forEach(function (opt) {
+              var option = document.createElement('option');
+              option.value = opt.value;
+              option.textContent = opt.label;
+              input.appendChild(option);
+            });
+            input.value = field.type === 'bool' ? String(value !== false) : (value || (field.options && field.options[0]) || '');
+          } else if (field.type === 'metadata') {
+            input = document.createElement('textarea');
+            input.value = jsonPretty(value || {});
+          } else {
+            input = document.createElement('input');
+            input.type = field.type === 'number' ? 'number' : field.type === 'password' ? 'password' : 'text';
+            if (field.step) input.step = field.step;
+            if (field.type === 'number') input.min = '0';
+            input.value = value === undefined || value === null ? '' : value;
+            input.placeholder = field.placeholder || '';
+            if (field.readonlyExisting && currentName) input.readOnly = true;
+          }
+          input.dataset.key = field.key;
+          input.dataset.type = field.type || 'text';
+          input.addEventListener('input', function () { modified = true; });
+          input.addEventListener('change', function () { modified = true; });
+          wrap.appendChild(input);
+          if (field.placeholder && field.type !== 'metadata') {
+            var help = document.createElement('div');
+            help.className = 'form-help';
+            help.textContent = field.placeholder;
+            wrap.appendChild(help);
+          }
+          return wrap;
+        }
+
+        function getAccountFormValue() {
+          var data = defaultAccountData();
+          accountFields.querySelectorAll('[data-key]').forEach(function (input) {
+            var key = input.dataset.key;
+            var type = input.dataset.type;
+            if (type === 'number') data[key] = numberOrZero(input.value || 0, key);
+            else if (type === 'bool') data[key] = input.value === 'true';
+            else if (type === 'metadata') {
+              try { data[key] = input.value.trim() ? JSON.parse(input.value) : {}; }
+              catch (e) { throw new Error('Metadata JSON 格式错误：' + e.message); }
+            } else {
+              data[key] = input.value.trim();
+            }
+          });
+          if (resourceType === 'users') {
+            if (!data.id) throw new Error('用户 ID 必填');
+            if (!data.account_uuid) delete data.account_uuid;
+            var quotaPolicy = Object.assign(defaultUserQuotaPolicy(data), currentUserQuotaDraft || {});
+            quotaPolicy.scope_type = 'user';
+            quotaPolicy.scope_id = data.id;
+            quotaPolicy.name = quotaPolicy.name || ((data.name || data.id) + ' quota');
+            Object.keys(data).forEach(function (key) { if (key.indexOf('quota_') === 0) delete data[key]; });
+            data.quota_policy = quotaPolicy;
+          }
+          if (resourceType === 'orgs') {
+            if (!data.id) throw new Error('组织 ID 必填');
+            if (!data.organization_uuid) delete data.organization_uuid;
+          }
+          if (resourceType === 'quota') {
+            if (!data.scope_type) throw new Error('Scope Type 必填');
+            if (data.scope_type === 'default') data.scope_id = '';
+            if (data.scope_type !== 'default' && !data.scope_id) throw new Error('user/org 策略必须填写 Scope ID');
+          }
+          return data;
+        }
+
+        function setQuotaModalValue(policy, userData) {
+          policy = Object.assign(defaultUserQuotaPolicy(userData || {}), policy || {});
+          document.getElementById('quota-modal-subtitle').textContent = '用户：' + (policy.scope_id || (userData && userData.id) || '新用户') + ' · 0 表示无限制，周周期从周一开始。';
+          document.getElementById('quota-enabled').value = String(policy.enabled !== false);
+          document.getElementById('quota-name').value = policy.name || '';
+          document.getElementById('quota-day-requests').value = policy.max_requests_per_day || 0;
+          document.getElementById('quota-day-tokens').value = policy.max_tokens_per_day || 0;
+          document.getElementById('quota-day-cost').value = policy.max_cost_per_day || 0;
+          document.getElementById('quota-week-requests').value = policy.max_requests_per_week || 0;
+          document.getElementById('quota-week-tokens').value = policy.max_tokens_per_week || 0;
+          document.getElementById('quota-week-cost').value = policy.max_cost_per_week || 0;
+          document.getElementById('quota-month-requests').value = policy.max_requests_per_month || 0;
+          document.getElementById('quota-month-tokens').value = policy.max_tokens_per_month || 0;
+          document.getElementById('quota-month-cost').value = policy.max_cost_per_month || 0;
+        }
+
+        function getQuotaModalValue(userData) {
+          var userId = (userData && userData.id) || currentName || '';
+          if (!userId) throw new Error('请先填写用户 ID');
+          return {
+            scope_type: 'user',
+            scope_id: userId,
+            name: document.getElementById('quota-name').value.trim() || (((userData && userData.name) || userId) + ' quota'),
+            enabled: document.getElementById('quota-enabled').value === 'true',
+            max_requests_per_day: numberOrZero(document.getElementById('quota-day-requests').value || 0, '每日请求数'),
+            max_tokens_per_day: numberOrZero(document.getElementById('quota-day-tokens').value || 0, '每日 Token'),
+            max_cost_per_day: numberOrZero(document.getElementById('quota-day-cost').value || 0, '每日成本'),
+            max_requests_per_week: numberOrZero(document.getElementById('quota-week-requests').value || 0, '每周请求数'),
+            max_tokens_per_week: numberOrZero(document.getElementById('quota-week-tokens').value || 0, '每周 Token'),
+            max_cost_per_week: numberOrZero(document.getElementById('quota-week-cost').value || 0, '每周成本'),
+            max_requests_per_month: numberOrZero(document.getElementById('quota-month-requests').value || 0, '每月请求数'),
+            max_tokens_per_month: numberOrZero(document.getElementById('quota-month-tokens').value || 0, '每月 Token'),
+            max_cost_per_month: numberOrZero(document.getElementById('quota-month-cost').value || 0, '每月成本'),
+            metadata: { source: 'user-quota-modal' },
+          };
+        }
+
+        function openQuotaModal() {
+          if (resourceType !== 'users') return;
+          var userData;
+          try { userData = getAccountFormValue(); }
+          catch (e) { return toast(e.message, 'error'); }
+          setQuotaModalValue(currentUserQuotaDraft, userData);
+          document.getElementById('modal-quota').classList.add('active');
+        }
+
+        function numberOrZero(value, label) {
+          var n = Number(value);
+          if (!Number.isFinite(n) || n < 0) throw new Error(label + '必须是非负数字');
+          return n;
+        }
+
+        function clearModelForm() {
+          Object.keys(modelFields).forEach(function (key) { modelFields[key].value = ''; });
+          modelFields.currency.value = 'CNY';
+        }
+
+        function ensureSelectOption(selectEl, value, label) {
+          value = value || '';
+          var exists = Array.prototype.some.call(selectEl.options, function (opt) { return opt.value === value; });
+          if (!exists) {
+            var option = document.createElement('option');
+            option.value = value;
+            option.textContent = label || value;
+            selectEl.appendChild(option);
+          }
+          return value;
+        }
+
+        function setModelFormValue(model) {
+          model = model || {};
+          modelFields.model_id.value = model.model_id || '';
+          modelFields.display_name.value = model.display_name || '';
+          modelFields.provider.value = ensureSelectOption(modelFields.provider, model.provider || '', model.provider || '未指定');
+          modelFields.currency.value = ensureSelectOption(modelFields.currency, (model.currency || 'CNY').toUpperCase());
+          modelFields.input_per_million.value = model.input_per_million ?? 0;
+          modelFields.output_per_million.value = model.output_per_million ?? 0;
+          modelFields.cache_read_per_million.value = model.cache_read_per_million ?? 0;
+          modelFields.cache_write_per_million.value = model.cache_write_per_million ?? 0;
+        }
+
+        function getModelFormValue() {
+          var modelId = modelFields.model_id.value.trim();
+          if (!modelId) throw new Error('模型 ID 必填');
+          return {
+            model_id: modelId,
+            display_name: modelFields.display_name.value.trim(),
+            provider: modelFields.provider.value.trim(),
+            input_per_million: numberOrZero(modelFields.input_per_million.value || 0, '输入价格'),
+            output_per_million: numberOrZero(modelFields.output_per_million.value || 0, '输出价格'),
+            cache_read_per_million: numberOrZero(modelFields.cache_read_per_million.value || 0, '缓存读取价格'),
+            cache_write_per_million: numberOrZero(modelFields.cache_write_per_million.value || 0, '缓存写入价格'),
+            currency: (modelFields.currency.value || 'CNY').trim().toUpperCase(),
+          };
+        }
+
+        function renderModelPreview(model) {
+          var currency = model.currency || 'CNY';
+          return '模型：' + (model.display_name || model.model_id) + '\n'
+            + 'ID：' + model.model_id + '\n'
+            + '供应商：' + (model.provider || '-') + '\n'
+            + '普通计费：' + currency + ' ' + model.input_per_million + '/百万输入 · '
+            + currency + ' ' + model.output_per_million + '/百万输出\n'
+            + '缓存计费：' + currency + ' ' + model.cache_read_per_million + '/百万缓存读取 · '
+            + currency + ' ' + model.cache_write_per_million + '/百万缓存写入';
+        }
+
+        function setMode(nextType) {
+          if (resourceType === nextType) return;
+          if (modified && !confirm('Discard unsaved changes?')) return;
+          resourceType = nextType;
+          currentName = null;
+          modified = false;
+          document.getElementById('tab-prompts').classList.toggle('active', resourceType === 'prompts');
+          document.getElementById('tab-skills').classList.toggle('active', resourceType === 'skills');
+          document.getElementById('tab-models').classList.toggle('active', resourceType === 'models');
+          document.getElementById('tab-users').classList.toggle('active', resourceType === 'users');
+          document.getElementById('tab-orgs').classList.toggle('active', resourceType === 'orgs');
+          document.getElementById('sidebar-title').textContent = resourceType === 'skills' ? 'Skills' : resourceType === 'models' ? 'Models' : resourceType === 'users' ? 'Users' : resourceType === 'orgs' ? 'Organizations' : 'Prompts';
+          document.getElementById('editor-title').textContent = 'No ' + resourceLabel().toLowerCase() + ' selected';
+          document.getElementById('preview-title').textContent = resourceType === 'skills' ? 'Rendered Skill' : resourceType === 'models' ? 'Pricing Preview' : isAccountFormResource() ? 'Account Preview' : 'Rendered Preview';
+          setModelFormVisible(resourceType === 'models');
+          setAccountFormVisible(isAccountFormResource());
+          document.getElementById('btn-delete').style.display = isAccountFormResource() ? 'none' : '';
+          document.getElementById('btn-user-quota').style.display = resourceType === 'users' ? '' : 'none';
+          clearModelForm();
+          if (isAccountFormResource()) setAccountFormValue(defaultAccountData());
+          setEditorValue(emptyEditorText());
+          document.getElementById('preview-content').innerHTML = '<div class="preview-empty">Select a ' + resourceLabel().toLowerCase() + '</div>';
+          loadList();
+        }
+
+        // ── Resource list ──
+
+        function loadList() {
+          var path = endpointBase() + (resourceType === 'skills' ? '?refresh=true' : '');
+          api('GET', path).then(function (list) {
+            var container = document.getElementById('template-list');
+            container.innerHTML = '';
+            list.forEach(function (t) {
+              var div = document.createElement('div');
+              var itemName = itemNameFor(t);
+              div.className = 'sidebar-item' + (itemName === currentName ? ' active' : '');
+              var readonly = resourceType === 'skills' && !t.editable;
+              div.innerHTML = '<div class="name">' + esc(itemName) + '</div>'
+                + (readonly ? '<span class="readonly-pill">readonly</span>' : '')
+                + (t.description ? '<div class="desc">' + esc(t.description) + '</div>' : '')
+                + (resourceType === 'models' && t.display_name ? '<div class="desc">' + esc(t.display_name) + '</div>' : '')
+                + (resourceType === 'users' ? '<div class="desc">' + esc(t.name || t.email || '-') + '</div><div class="meta">account_uuid: ' + esc(t.account_uuid || '-') + '</div><div class="quota">' + esc(t.subscription_type || '-') + ' · ' + esc(t.rate_limit_tier || '-') + '</div>' : '')
+                + (resourceType === 'orgs' ? '<div class="desc">' + esc(t.name || '-') + '</div><div class="meta">organization_uuid: ' + esc(t.organization_uuid || '-') + '</div><div class="quota">billing: ' + esc(t.billing_type || '-') + '</div>' : '')
+                + (resourceType === 'quota' ? '<div class="desc">' + esc(t.name || '-') + '</div><div class="meta">scope: ' + esc(t.scope_type) + ' ' + esc(t.scope_id || '') + '</div><div class="quota">day req/tok/cost: ' + esc(t.max_requests_per_day) + '/' + esc(t.max_tokens_per_day) + '/' + esc(t.max_cost_per_day) + '</div>' : '')
+                + (resourceType === 'models' ? '<div class="price">' + esc(t.currency || 'CNY') + ' 输入/输出/缓存读/缓存写：' + esc(t.input_per_million) + '/' + esc(t.output_per_million) + '/' + esc(t.cache_read_per_million) + '/' + esc(t.cache_write_per_million) + ' / 百万</div>' : '')
+                + (t.source ? '<div class="meta">' + esc(t.source) + ' · ' + esc(t.path || '') + '</div>' : '')
+                + (resourceType === 'models' ? '<div class="meta">' + esc(t.provider || '-') + '</div>' : '')
+                + (t.error ? '<div class="desc" style="color:#ef4444">Parse error</div>' : '');
+              div.onclick = function () { selectItem(itemName); };
+              container.appendChild(div);
+            });
+          }).catch(function (e) { toast('Failed to load ' + resourceType + ': ' + e.message, 'error'); });
+        }
+
+        function selectItem(name) {
+          if (modified && !confirm('Discard unsaved changes?')) return;
+          currentName = name;
+          modified = false;
+          var path = pathForItem(name);
+          api('GET', path).then(function (data) {
+            if (resourceType === 'models') setModelFormValue(data);
+            else if (isAccountFormResource()) setAccountFormValue(data);
+            else setEditorValue(data);
+            document.getElementById('editor-title').textContent = name;
+            if (isAccountFormResource()) document.getElementById('preview-content').innerHTML = esc(renderJsonPreview(data));
+            loadList();
+          }).catch(function (e) { toast(e.message, 'error'); });
+        }
+
+        function renderJsonPreview(data) {
+          if (resourceType === 'users') {
+            var policy = data.quota_policy || data;
+            return '用户：' + (data.name || data.id) + '\n'
+              + 'ID：' + data.id + '\n'
+              + 'account_uuid：' + (data.account_uuid || '-') + '\n'
+              + 'email：' + (data.email || '-') + '\n'
+              + '订阅：' + (data.subscription_type || '-') + ' · tier=' + (data.rate_limit_tier || '-') + '\n'
+              + '用户额度：日 ' + (policy.max_requests_per_day || data.quota_max_requests_per_day || 0) + ' req / 周 ' + (policy.max_requests_per_week || data.quota_max_requests_per_week || 0) + ' req / 月 ' + (policy.max_requests_per_month || data.quota_max_requests_per_month || 0) + ' req\n'
+              + '用量：' + (data.usage ? (data.usage.request_count + ' requests · ' + data.usage.total_tokens + ' tokens') : '-');
+          }
+          if (resourceType === 'orgs') {
+            return '组织：' + (data.name || data.id) + '\n'
+              + 'ID：' + data.id + '\n'
+              + 'organization_uuid：' + (data.organization_uuid || '-') + '\n'
+              + 'billing_type：' + (data.billing_type || '-') + '\n'
+              + '用量：' + (data.usage ? (data.usage.request_count + ' requests · ' + data.usage.total_tokens + ' tokens') : '-');
+          }
+          if (resourceType === 'quota') {
+            return '额度策略：' + (data.name || quotaKey(data)) + '\n'
+              + 'scope：' + data.scope_type + ':' + (data.scope_id || '') + '\n'
+              + '日限额：requests=' + data.max_requests_per_day + ', tokens=' + data.max_tokens_per_day + ', cost=' + data.max_cost_per_day + '\n'
+              + '周限额：requests=' + data.max_requests_per_week + ', tokens=' + data.max_tokens_per_week + ', cost=' + data.max_cost_per_week + '\n'
+              + '月限额：requests=' + data.max_requests_per_month + ', tokens=' + data.max_tokens_per_month + ', cost=' + data.max_cost_per_month + '\n'
+              + 'enabled：' + data.enabled;
+          }
+          return jsonPretty(data);
+        }
+
+        // ── Actions ──
+
+        document.getElementById('btn-save').onclick = function () {
+          if (!currentName) return toast('No ' + resourceLabel().toLowerCase() + ' selected', 'error');
+          if (resourceType === 'models') {
+            var modelData;
+            try { modelData = getModelFormValue(); }
+            catch (e) { return toast(e.message, 'error'); }
+            api('PUT', endpointBase() + '/' + encodeURIComponent(currentName), modelData)
+              .then(function () { modified = false; toast('Saved'); loadList(); })
+              .catch(function (e) { toast(e.message, 'error'); });
+            return;
+          }
+          if (isAccountFormResource()) {
+            var jsonData;
+            try { jsonData = getAccountFormValue(); }
+            catch (e) { return toast(e.message, 'error'); }
+            var quotaPolicyToSave = resourceType === 'users' ? jsonData.quota_policy : null;
+            if (resourceType === 'users') delete jsonData.quota_policy;
+            api('POST', endpointBase(), jsonData)
+              .then(function (saved) {
+                if (!quotaPolicyToSave) return saved;
+                return api('POST', '/quota/policies', quotaPolicyToSave).then(function (policy) {
+                  saved.quota_policy = policy;
+                  return saved;
+                });
+              })
+              .then(function (saved) {
+                modified = false;
+                currentName = itemNameFor(saved);
+                setAccountFormValue(saved);
+                document.getElementById('editor-title').textContent = currentName;
+                document.getElementById('preview-content').innerHTML = esc(renderJsonPreview(saved));
+                toast('Saved');
+                loadList();
+              })
+              .catch(function (e) { toast(e.message, 'error'); });
+            return;
+          }
+          var rawText = getEditorValue();
+          var contentType = resourceType === 'skills' ? 'text/markdown' : 'text/yaml';
+          api('PUT', endpointBase() + '/' + encodeURIComponent(currentName) + '/raw', rawText, contentType)
+            .then(function () { modified = false; toast('Saved'); loadList(); })
+            .catch(function (e) { toast(e.message, 'error'); });
+        };
+
+        document.getElementById('btn-preview').onclick = function () {
+          if (!currentName) return toast('No ' + resourceLabel().toLowerCase() + ' selected', 'error');
+          document.getElementById('preview-content').innerHTML = '<div class="preview-empty">Loading...</div>';
+          if (resourceType === 'models') {
+            try {
+              document.getElementById('preview-content').innerHTML = esc(renderModelPreview(getModelFormValue()));
+            } catch (e) {
+              toast(e.message, 'error');
+            }
+            return;
+          }
+          if (isAccountFormResource()) {
+            try { document.getElementById('preview-content').innerHTML = esc(renderJsonPreview(getAccountFormValue())); }
+            catch (e) { toast(e.message, 'error'); }
+            return;
+          }
+          var previewPath = resourceType === 'skills'
+            ? '/skills/' + encodeURIComponent(currentName) + '/render'
+            : '/prompts/' + encodeURIComponent(currentName) + '/preview';
+          api('GET', previewPath).then(function (r) {
+            var text = r.rendered || '';
+            text = esc(text).replace(
+              /__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__/g,
+              '<span class="boundary">__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__</span>'
+            );
+            document.getElementById('preview-content').innerHTML = text;
+          }).catch(function (e) { toast(e.message, 'error'); });
+        };
+
+        document.getElementById('btn-delete').onclick = function () {
+          if (!currentName) return;
+          if (!confirm('Delete ' + resourceLabel().toLowerCase() + ' "' + currentName + '"?')) return;
+          api('DELETE', endpointBase() + '/' + encodeURIComponent(currentName))
+            .then(function () {
+              currentName = null;
+              modified = false;
+              clearModelForm();
+              setEditorValue('# ' + resourceLabel() + ' deleted');
+              document.getElementById('editor-title').textContent = 'No ' + resourceLabel().toLowerCase() + ' selected';
+              document.getElementById('preview-content').innerHTML = '<div class="preview-empty">Select a ' + resourceLabel().toLowerCase() + '</div>';
+              toast('Deleted');
+              loadList();
+            })
+            .catch(function (e) { toast(e.message, 'error'); });
+        };
+
+        // ── New template modal ──
+
+        var modal = document.getElementById('modal-new');
+        var quotaModal = document.getElementById('modal-quota');
+        document.getElementById('btn-new').onclick = function () {
+          document.getElementById('modal-title').textContent = 'New ' + resourceLabel();
+          document.getElementById('new-name').placeholder = resourceType === 'skills' ? 'Skill 名称（例如 code-review）' : resourceType === 'models' ? '模型 ID（例如 claude-sonnet-4-6）' : resourceType === 'users' ? '用户 ID（例如 alice）' : resourceType === 'orgs' ? '组织 ID（例如 team-a）' : resourceType === 'quota' ? 'scope，例如 user:alice / org:team-a / default' : '模板名称（例如 my-agent）';
+          document.getElementById('new-desc').placeholder = resourceType === 'users' ? '姓名或邮箱' : resourceType === 'orgs' ? '组织名称' : resourceType === 'quota' ? '策略名称' : 'Description';
+          modal.classList.add('active');
+          document.getElementById('new-name').focus();
+        };
+        document.getElementById('modal-cancel').onclick = function () { modal.classList.remove('active'); };
+        document.getElementById('btn-user-quota').onclick = openQuotaModal;
+        document.getElementById('quota-modal-cancel').onclick = function () { quotaModal.classList.remove('active'); };
+        document.getElementById('quota-modal-apply').onclick = function () {
+          var userData;
+          try {
+            userData = getAccountFormValue();
+            currentUserQuotaDraft = getQuotaModalValue(userData);
+          } catch (e) {
+            return toast(e.message, 'error');
+          }
+          quotaModal.classList.remove('active');
+          modified = true;
+          document.getElementById('preview-content').innerHTML = esc(renderJsonPreview(Object.assign({}, userData, { quota_policy: currentUserQuotaDraft })));
+          toast('额度已应用，点击 Save 后生效');
+        };
+        document.getElementById('modal-create').onclick = function () {
+          var name = document.getElementById('new-name').value.trim();
+          var desc = document.getElementById('new-desc').value.trim();
+          if (!name) return toast('Name is required', 'error');
+          var data;
+          if (resourceType === 'skills') data = { name: name, description: desc };
+          else if (resourceType === 'models') data = { model_id: name, display_name: desc || name, provider: '', input_per_million: 0, output_per_million: 0, cache_read_per_million: 0, cache_write_per_million: 0, currency: 'CNY' };
+          else if (resourceType === 'users') data = { id: name, email: desc.indexOf('@') >= 0 ? desc : '', name: desc.indexOf('@') >= 0 ? name : (desc || name), status: 'active', subscription_type: 'local', rate_limit_tier: 'default', metadata: {} };
+          else if (resourceType === 'orgs') data = { id: name, name: desc || name, billing_type: 'local', status: 'active', metadata: {} };
+          else if (resourceType === 'quota') {
+            var scopeType = 'default';
+            var scopeId = '';
+            if (name !== 'default') {
+              var idx = name.indexOf(':');
+              scopeType = idx >= 0 ? name.slice(0, idx) : 'user';
+              scopeId = idx >= 0 ? name.slice(idx + 1) : name;
+            }
+            data = { scope_type: scopeType, scope_id: scopeId, name: desc || name, max_requests_per_day: 0, max_tokens_per_day: 0, max_cost_per_day: 0, max_requests_per_week: 0, max_tokens_per_week: 0, max_cost_per_week: 0, max_requests_per_month: 0, max_tokens_per_month: 0, max_cost_per_month: 0, enabled: true, metadata: {} };
+          } else {
+            data = {
+                metadata: { name: name, description: desc, version: '1.0.0' },
+                product_name: 'MyAgent',
+                base_instructions: 'You are a helpful assistant.',
+                sections: [{ title: 'Basic Rules', content: '- Be concise and direct\n- Use tools when needed' }],
+                dynamic_sections: [{ name: 'cwd', compute: 'os_getcwd', cache_break: false }],
+                context: { prepend: {}, append: { session_id: 'auto' } },
+              };
+          }
+          api('POST', endpointBase(), data)
+            .then(function (saved) {
+              modal.classList.remove('active');
+              document.getElementById('new-name').value = '';
+              document.getElementById('new-desc').value = '';
+              toast('Created');
+              loadList();
+              selectItem(resourceType === 'prompts' || resourceType === 'skills' ? name : itemNameFor(saved || data));
+            })
+            .catch(function (e) { toast(e.message, 'error'); });
+        };
+
+        document.getElementById('tab-prompts').onclick = function () { setMode('prompts'); };
+        document.getElementById('tab-skills').onclick = function () { setMode('skills'); };
+        document.getElementById('tab-models').onclick = function () { setMode('models'); };
+        document.getElementById('tab-users').onclick = function () { setMode('users'); };
+        document.getElementById('tab-orgs').onclick = function () { setMode('orgs'); };
+        document.getElementById('btn-logout').onclick = function () {
+          fetch('/admin/logout', { method: 'POST' }).finally(function () { location.href = '/admin/login'; });
+        };
+
+        // ── Runtime config ──
+
+        function loadConfig() {
+          api('GET', '/config').then(function (cfg) {
+            var userLine = cfg.user ? ('<br>User: <span class="provider">' + esc(cfg.user.id) + '</span>') : '';
+            var orgLine = cfg.organization ? ('<br>Org: ' + esc(cfg.organization.id)) : '';
+            var quotaLine = cfg.quota ? ('<br>Quota: ' + (cfg.quota.enabled ? 'on' : 'off')) : '';
+            document.getElementById('runtime-info').innerHTML =
+              'Provider: <span class="provider">' + esc(cfg.model_provider) + '</span><br>' +
+              'Model: ' + esc(cfg.model_id) + '<br>' +
+              'Session: ' + esc(cfg.session_id) + '<br>' +
+              'Permission: ' + esc((cfg.permissions && cfg.permissions.mode_title) || 'Default') +
+              ' <span style="color:#71717a">(' + esc((cfg.permissions && cfg.permissions.mode) || 'default') + ')</span>' +
+              userLine + orgLine + quotaLine;
+          }).catch(function () {
+            document.getElementById('runtime-info').textContent = 'Config unavailable';
+          });
+        }
+
+        // ── Init ──
+
+        loadList();
+        loadConfig();
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,2931 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyAgent Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" />
+    <style>
+      :root {
+        --bg: #11100d;
+        --panel: rgba(28, 25, 20, 0.74);
+        --panel-strong: rgba(35, 31, 24, 0.92);
+        --line: rgba(230, 197, 150, 0.14);
+        --line-strong: rgba(236, 158, 91, 0.32);
+        --text: #ede3d2;
+        --muted: #9d8f7d;
+        --faint: #6f6253;
+        --orange: #d97745;
+        --orange-hot: #ff9a5f;
+        --gold: #f0bf6a;
+        --green: #7ad66d;
+        --red: #ff6b5f;
+        --blue: #7fb4ff;
+        --mono: 'JetBrains Mono', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+      }
+      *, *::before, *::after { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; }
+
+      body {
+        background:
+          radial-gradient(circle at 16% 12%, rgba(217,119,69,0.23), transparent 28%),
+          radial-gradient(circle at 84% 8%, rgba(240,191,106,0.13), transparent 24%),
+          radial-gradient(circle at 70% 92%, rgba(127,180,255,0.10), transparent 30%),
+          linear-gradient(135deg, #17130e 0%, #0d0d0c 46%, #15120f 100%);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        height: 100vh;
+        overflow: hidden;
+      }
+      body::before {
+        content: '';
+        position: fixed; inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(236,158,91,0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(236,158,91,0.035) 1px, transparent 1px);
+        background-size: 36px 36px;
+        mask-image: radial-gradient(circle at 55% 40%, black, transparent 78%);
+        animation: gridDrift 24s linear infinite;
+      }
+      body::after {
+        content: '';
+        position: fixed; inset: 0;
+        pointer-events: none;
+        opacity: 0.18;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
+        mix-blend-mode: soft-light;
+      }
+      @keyframes gridDrift { from { background-position: 0 0; } to { background-position: 36px 72px; } }
+
+      /* ── 左侧会话列表 ── */
+      .sidebar {
+        width: 286px;
+        min-width: 286px;
+        background: linear-gradient(180deg, rgba(29,25,19,0.92), rgba(17,16,13,0.82));
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        position: relative;
+        box-shadow: inset -1px 0 0 rgba(255,255,255,0.03), 26px 0 70px rgba(0,0,0,0.34);
+        backdrop-filter: blur(22px);
+      }
+      .sidebar::before {
+        content: '';
+        position: absolute; inset: 0 0 auto 0; height: 230px;
+        background: radial-gradient(circle at 32px 18px, rgba(255,154,95,0.28), transparent 34%), linear-gradient(180deg, rgba(255,154,95,0.06), transparent);
+        pointer-events: none;
+      }
+
+      .sidebar-header {
+        padding: 16px 16px 12px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: relative;
+        z-index: 1;
+      }
+      .sidebar-header h2 {
+        font-size: 10px; font-weight: 800; color: var(--faint);
+        text-transform: uppercase; letter-spacing: 0.14em;
+      }
+      .brand-block {
+        padding: 16px 16px 14px;
+        border-bottom: 1px solid var(--line);
+        position: relative;
+        z-index: 1;
+      }
+      .brand-mark { display: flex; align-items: center; gap: 10px; }
+      .brand-glyph {
+        width: 34px; height: 34px; border-radius: 10px;
+        display: grid; place-items: center;
+        color: #130f0b; font-weight: 900; font-size: 16px;
+        background: conic-gradient(from 210deg, #ffb477, var(--orange), #f0bf6a, #ffb477);
+        box-shadow: 0 0 32px rgba(217,119,69,0.42), inset 0 1px 0 rgba(255,255,255,0.45);
+        animation: glyphBreathe 2.8s ease-in-out infinite;
+      }
+      .brand-title { font-size: 15px; font-weight: 850; letter-spacing: -0.03em; color: var(--text); }
+      .brand-sub { margin-top: 1px; color: var(--muted); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+      .brand-ticker {
+        margin-top: 12px; display: flex; gap: 7px; flex-wrap: wrap;
+      }
+      .ticker-chip {
+        color: var(--muted); font-size: 10px; padding: 3px 7px; border-radius: 999px;
+        border: 1px solid rgba(236,158,91,0.18); background: rgba(255,255,255,0.035);
+      }
+      .ticker-chip.live { color: var(--gold); border-color: rgba(240,191,106,0.28); }
+      .ticker-chip.live::before { content: '●'; color: var(--green); margin-right: 5px; animation: pulse 1.4s ease-in-out infinite; }
+      @keyframes glyphBreathe { 0%,100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-1px) rotate(-2deg); } }
+      .sidebar-actions { display:flex; gap:7px; align-items:center; }
+      button { font-family: inherit; }
+      .btn-new, .btn-logout { transition: transform .16s ease, border-color .16s ease, background .16s ease, color .16s ease; }
+      .btn-new:hover, .btn-logout:hover { transform: translateY(-1px); }
+      .btn-new {
+        background: linear-gradient(180deg, rgba(255,154,95,0.18), rgba(217,119,69,0.08)); color: #ffd1ad;
+        border: 1px solid rgba(255,154,95,0.34);
+        padding: 5px 10px; border-radius: 8px; font-size: 11px;
+        cursor: pointer;
+      }
+      .btn-new:hover { background: linear-gradient(180deg, rgba(255,154,95,0.28), rgba(217,119,69,0.14)); }
+      .btn-logout {
+        background: rgba(255,255,255,0.035); color: var(--muted);
+        border: 1px solid rgba(230,197,150,0.12);
+        padding: 5px 9px; border-radius: 8px; font-size: 11px;
+        cursor: pointer;
+      }
+      .btn-logout:hover { background: rgba(255,107,95,0.12); color: #ffb0a9; }
+
+      .session-list { flex: 1; overflow-y: auto; padding: 8px; position: relative; z-index: 1; }
+      .session-item {
+        padding: 10px 11px; border-radius: 12px; cursor: pointer;
+        margin-bottom: 5px; display: flex; align-items: center;
+        gap: 8px; border: 1px solid transparent; font-size: 12px;
+        background: rgba(255,255,255,0.018);
+        transition: background .16s ease, border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+      }
+      .session-item:hover { background: rgba(255,255,255,0.055); transform: translateX(2px); border-color: rgba(236,158,91,0.13); }
+      .session-item.active { background: linear-gradient(90deg, rgba(217,119,69,0.16), rgba(255,255,255,0.035)); border-color: rgba(255,154,95,0.32); box-shadow: 0 10px 34px rgba(217,119,69,0.08); }
+      .session-info { flex: 1; min-width: 0; }
+      .session-title { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
+      .session-meta { font-size: 10px; color: var(--faint); margin-top: 2px; }
+      .session-usage { font-size: 10px; color: var(--gold); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .session-delete {
+        opacity: 0; background: none; border: none; color: #52525b;
+        cursor: pointer; padding: 0 2px; font-size: 13px; font-family: inherit;
+      }
+      .session-item:hover .session-delete { opacity: 1; }
+      .session-delete:hover { color: var(--red); }
+
+      .session-list::-webkit-scrollbar { width: 3px; }
+      .session-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); }
+
+      /* ── 右侧终端 ── */
+      .main {
+        flex: 1; display: flex; flex-direction: column;
+        overflow: hidden; position: relative;
+        background: linear-gradient(180deg, rgba(255,255,255,0.018), transparent 30%);
+      }
+      .main::before {
+        content: '';
+        position: absolute; inset: 16px 16px 16px 0;
+        border: 1px solid rgba(230,197,150,0.08);
+        border-radius: 22px;
+        pointer-events: none;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.018), 0 24px 80px rgba(0,0,0,0.16);
+      }
+
+      .terminal-chrome {
+        position: relative;
+        z-index: 2;
+        margin: 14px 16px 0 18px;
+        padding: 9px 12px;
+        border: 1px solid rgba(230,197,150,0.12);
+        border-radius: 16px;
+        background: rgba(23,20,16,0.62);
+        backdrop-filter: blur(18px);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 12px 50px rgba(0,0,0,0.18);
+      }
+      .traffic { display: flex; gap: 6px; }
+      .traffic i { width: 10px; height: 10px; border-radius: 50%; display:block; box-shadow: inset 0 1px 0 rgba(255,255,255,.36); }
+      .traffic i:nth-child(1) { background:#ff6b5f; }
+      .traffic i:nth-child(2) { background:#f0bf6a; }
+      .traffic i:nth-child(3) { background:#7ad66d; }
+      .chrome-title { color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+      .chrome-title strong { color: var(--orange-hot); font-weight: 900; }
+      .chrome-spacer { flex: 1; }
+      .chrome-pill {
+        position: relative;
+        color: var(--muted); font-size: 10px; padding: 4px 8px; border-radius: 999px;
+        border: 1px solid rgba(230,197,150,0.12); background: rgba(255,255,255,0.03);
+        overflow: hidden;
+      }
+      .chrome-pill::after {
+        content:''; position:absolute; inset:0; transform: translateX(-120%);
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+        animation: pillScan 3.8s ease-in-out infinite;
+      }
+      @keyframes pillScan { 0%, 35% { transform: translateX(-120%); } 70%, 100% { transform: translateX(120%); } }
+
+      .term-output {
+        flex: 1; overflow-y: auto; padding: 18px 26px 18px 24px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .term-line { white-space: pre-wrap; word-break: break-word; }
+
+      /* 提示符 */
+      .prompt { color: var(--orange-hot); text-shadow: 0 0 18px rgba(255,154,95,0.35); }
+
+      /* 工具行 */
+      .tool-line { color: var(--gold); }
+      .tool-ok { color: var(--green); }
+      .tool-err { color: var(--red); }
+      .tool-denied { color: var(--red); }
+      .tool-detail {
+        display: none; color: #71717a; padding-left: 16px;
+        font-size: 12px; white-space: pre-wrap; word-break: break-all;
+        max-height: 200px; overflow-y: auto;
+      }
+      .tool-line-wrap.open .tool-detail { display: block; }
+      .tool-line-wrap { cursor: pointer; }
+      .tool-line-wrap:hover .tool-line { text-decoration: underline; }
+      .bash-summary { color: #a1a1aa; padding-left: 16px; font-size: 12px; }
+      .bash-meta { color: #71717a; margin-left: 6px; }
+      .bash-output {
+        margin: 3px 0 5px 16px;
+        border-left: 1px solid rgba(255,255,255,0.08);
+        padding-left: 8px;
+        font-size: 12px;
+      }
+      .bash-section { margin: 3px 0; }
+      .bash-label { color: #71717a; user-select: none; }
+      .bash-stdout, .bash-stderr {
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .bash-stdout { color: #d4d4d8; }
+      .bash-stderr { color: #fca5a5; }
+      .bash-progress { color: #60a5fa; padding-left: 16px; font-size: 12px; }
+
+      /* Thinking：默认收起、低亮度、终端内联折叠块 */
+      .thinking-wrap {
+        cursor: pointer;
+        margin: 3px 0 4px;
+        border-left: 1px solid rgba(113,113,122,0.18);
+        padding-left: 10px;
+        opacity: 0.78;
+        transition: opacity 120ms ease, border-color 120ms ease;
+      }
+      .thinking-wrap:hover { opacity: 1; border-left-color: rgba(113,113,122,0.36); }
+      .thinking-line {
+        color: #71717a;
+        user-select: none;
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        min-height: 19px;
+      }
+      .thinking-chevron { color: #52525b; width: 10px; flex: 0 0 10px; }
+      .thinking-label {
+        color: #a1a1aa;
+        font-style: italic;
+        letter-spacing: 0.01em;
+      }
+      .thinking-meta { color: #52525b; font-size: 11px; }
+      .thinking-preview {
+        color: #52525b;
+        font-size: 11px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        max-width: min(70vw, 760px);
+      }
+      .thinking-detail {
+        display: none;
+        margin: 4px 0 2px 17px;
+        padding: 8px 10px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.012));
+        border: 1px solid rgba(255,255,255,0.055);
+        border-radius: 6px;
+        color: #85858f;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      .thinking-detail::-webkit-scrollbar { width: 4px; }
+      .thinking-detail::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 99px; }
+      .thinking-wrap.open { opacity: 1; border-left-color: rgba(161,161,170,0.42); }
+      .thinking-wrap.open .thinking-detail { display: block; }
+      .thinking-wrap.open .thinking-preview { display: none; }
+
+      /* TodoWrite 专属展示 */
+      .todo-summary { color: #a1a1aa; padding-left: 16px; font-size: 12px; }
+      .todo-list {
+        margin: 2px 0 4px 16px;
+        padding: 4px 0 4px 8px;
+        border-left: 1px solid rgba(255,255,255,0.08);
+      }
+      .todo-item {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        min-height: 18px;
+      }
+      .todo-icon { width: 14px; flex: 0 0 14px; text-align: center; }
+      .todo-content { color: #d4d4d8; }
+      .todo-active { color: #71717a; font-size: 11px; margin-left: 4px; }
+      .todo-pending .todo-icon { color: #71717a; }
+      .todo-in_progress .todo-icon { color: #22d3ee; }
+      .todo-completed .todo-icon { color: #4ade80; }
+      .todo-completed .todo-content { color: #71717a; text-decoration: line-through; }
+
+      /* 系统消息 */
+      .sys-line { color: #71717a; font-style: italic; }
+      .err-line { color: #f87171; }
+      .hook-line { color: #c084fc; }
+      .command-result {
+        margin: 8px 0;
+        padding: 10px 12px 10px 13px;
+        border-left: 2px solid rgba(255,154,95,0.55);
+        border-radius: 0 14px 14px 0;
+        background: linear-gradient(90deg, rgba(217,119,69,0.10), rgba(255,255,255,0.025));
+        box-shadow: 0 14px 50px rgba(0,0,0,0.16);
+      }
+      .command-title { color: var(--orange-hot); font-weight: 800; }
+      .command-body {
+        color: var(--muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin-top: 2px;
+      }
+      .command-error .command-title { color: var(--red); }
+      .command-error { border-left-color: rgba(255,107,95,0.55); background: linear-gradient(90deg, rgba(255,107,95,0.10), rgba(255,255,255,0.025)); }
+      .quota-bars {
+        margin-top: 8px;
+        display: grid;
+        gap: 8px;
+        max-width: 720px;
+      }
+      .quota-row {
+        display: grid;
+        grid-template-columns: minmax(150px, 220px) 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .quota-label { color: var(--text); font-size: 12px; }
+      .quota-track {
+        height: 9px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(0,0,0,0.22);
+        border: 1px solid rgba(230,197,150,0.12);
+      }
+      .quota-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--green), var(--orange-hot));
+        box-shadow: 0 0 18px rgba(255,154,95,0.36);
+      }
+      .quota-row.quota-warn .quota-fill { background: linear-gradient(90deg, #f59e0b, #f97316); }
+      .quota-row.quota-exceeded .quota-fill { background: linear-gradient(90deg, #ef4444, #f87171); }
+      .quota-value { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+      /* ── Markdown 渲染区（嵌入终端流） ── */
+      .md-block {
+        margin: 4px 0;
+        line-height: 1.6;
+        color: var(--text);
+      }
+      .md-block h1, .md-block h2, .md-block h3 {
+        color: #fff1df; margin: 12px 0 4px; font-weight: 750;
+      }
+      .md-block h1 { font-size: 16px; }
+      .md-block h2 { font-size: 14px; }
+      .md-block h3 { font-size: 13px; }
+      .md-block p { margin: 4px 0; }
+      .md-block ul, .md-block ol { margin: 4px 0; padding-left: 18px; }
+      .md-block li { margin: 1px 0; }
+      .md-block code {
+        background: rgba(217,119,69,0.16); padding: 1px 5px;
+        border-radius: 5px; color: #ffd1ad; font-size: 12px;
+      }
+      .md-block pre {
+        background: rgba(7,6,5,0.72); border: 1px solid rgba(230,197,150,0.12);
+        border-radius: 12px; padding: 10px 12px; margin: 8px 0;
+        overflow-x: auto;
+      }
+      .md-block pre code {
+        background: none; padding: 0; color: #d4d4d8;
+        font-size: 12px; line-height: 1.4;
+      }
+      .md-block blockquote {
+        border-left: 2px solid var(--orange); margin: 4px 0;
+        padding: 2px 10px; color: var(--muted);
+      }
+      .md-block a { color: var(--gold); text-decoration: none; }
+      .md-block a:hover { text-decoration: underline; }
+      .md-block table { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+      .md-block th, .md-block td { border: 1px solid rgba(255,255,255,0.1); padding: 4px 8px; }
+      .md-block th { background: rgba(255,255,255,0.04); }
+      .md-block strong { color: #f4f4f5; }
+      .md-block hr { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 8px 0; }
+
+      /* 思考中 */
+      .thinking-dots { display: inline-flex; gap: 3px; padding: 2px 0; }
+      .thinking-dots span {
+        width: 5px; height: 5px; border-radius: 50%; background: var(--orange-hot);
+        animation: dot-bounce 1.2s ease-in-out infinite;
+      }
+      .thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
+      .thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes dot-bounce { 0%,80%,100% { opacity: 0.3; } 40% { opacity: 1; } }
+
+      /* ── 终端内嵌输入框 ── */
+      .input-row {
+        padding-right: 16px;
+        margin-top: 8px;
+      }
+      .input-line {
+        display: flex;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid rgba(255,154,95,0.16);
+        border-radius: 14px;
+        background: rgba(0,0,0,0.16);
+      }
+      .input-line .prompt {
+        color: var(--orange-hot);
+        margin-right: 8px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .input-line input {
+        flex: 1;
+        background: none;
+        border: none;
+        outline: none;
+        color: var(--text);
+        font-family: inherit;
+        font-size: inherit;
+        line-height: inherit;
+        padding: 0;
+        caret-color: var(--orange-hot);
+      }
+      .input-line input::placeholder {
+        color: #3f3f46;
+      }
+      .companion-dock {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: auto;
+        right: clamp(18px, 3vw, 42px);
+        transform: translateY(-50%);
+        z-index: 72;
+        align-items: flex-start;
+        justify-content: flex-end;
+        gap: 12px;
+        pointer-events: none;
+      }
+      .companion-dock.visible { display: flex; }
+      .companion-bubble {
+        display: none;
+        position: static;
+        transform: none;
+        max-width: 260px;
+        margin-top: 18px;
+        padding: 9px 11px;
+        border: 1px solid color-mix(in srgb, var(--companion-accent, var(--orange)) 58%, #28231b);
+        border-radius: 2px 14px 14px 14px;
+        color: #efe5d2;
+        background:
+          linear-gradient(135deg, rgba(255,255,255,0.045), transparent 30%),
+          rgba(16,14,11,0.94);
+        box-shadow: 0 16px 42px rgba(0,0,0,0.46), inset 0 0 0 1px rgba(255,255,255,0.035);
+        font-size: 12px;
+        line-height: 1.35;
+        letter-spacing: -0.01em;
+      }
+      .companion-bubble.show { display:block; animation: companion-pop .18s ease-out; }
+      .companion-bubble.fade { opacity: .42; }
+      .companion-card-mini {
+        position: relative;
+        min-width: 126px;
+        padding: 12px 10px 10px;
+        text-align: center;
+        color: var(--companion-accent, var(--orange));
+        background:
+          radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--companion-accent, #d97745) 22%, transparent), transparent 52%),
+          linear-gradient(180deg, #16130f, #0e0d0b);
+        border: 1px solid color-mix(in srgb, var(--companion-accent, #d97745) 48%, #28231b);
+        border-radius: 16px 16px 5px 5px;
+        box-shadow: 0 22px 60px rgba(0,0,0,0.38), 0 0 0 1px rgba(255,255,255,0.035) inset;
+        clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%, 0 10px);
+      }
+      .companion-card-mini::before {
+        content: '✦';
+        position: absolute;
+        top: 4px;
+        left: 9px;
+        right: 9px;
+        color: color-mix(in srgb, var(--companion-accent, #d97745) 82%, #fff);
+        font-size: 10px;
+        letter-spacing: 3.2em;
+        opacity: .72;
+      }
+      .companion-hearts { position:absolute; inset:auto 0 100% 0; min-height: 18px; color:#ffb3ca; opacity:0; transform: translateY(5px); pointer-events:none; }
+      .companion-hearts.show { animation: companion-hearts 2.5s ease-out; }
+      .companion-sprite { white-space: pre; line-height: 1.04; font-size: 11px; letter-spacing: 0; text-shadow: 0 0 18px color-mix(in srgb, var(--companion-accent, #d97745) 52%, transparent); transform: translateY(3px); }
+      .companion-face { display:none; font-weight: 800; }
+      .companion-name { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.07); font-size: 11px; color: var(--muted); white-space: nowrap; }
+      .companion-name strong { color: var(--companion-accent, var(--orange)); }
+      @keyframes companion-pop { from { transform: translate(8px, 4px) scale(.98); opacity:0; } to { transform: translate(0, 0) scale(1); opacity:1; } }
+      @keyframes companion-hearts { 0% { opacity:0; transform:translateY(8px) scale(.9); } 15% { opacity:1; } 100% { opacity:0; transform:translateY(-30px) scale(1.18); } }
+      @media (max-width: 980px) {
+        .companion-dock { top: 50%; left: auto; right: 10px; transform: translateY(-50%) scale(.92); transform-origin: right center; }
+        .companion-sprite { display:none; }
+        .companion-face { display:inline; }
+        .companion-bubble { max-width: min(190px, calc(100vw - 28px)); }
+        .companion-card-mini { min-width: 86px; }
+      }
+      /* 闪烁光标不需要了，input 自带 caret */
+      .input-cursor { display: none; }
+
+      .slash-menu {
+        position: relative;
+        margin-top: 6px;
+        margin-left: 0;
+        width: min(620px, calc(100vw - 300px));
+        max-height: 280px;
+        overflow-y: auto;
+        background: rgba(23,20,16,0.96);
+        border: 1px solid rgba(255,154,95,0.28);
+        box-shadow: 0 18px 48px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.04);
+        border-radius: 14px;
+        padding: 5px;
+        z-index: 80;
+        pointer-events: auto;
+      }
+      .slash-menu::before {
+        content: 'slash commands';
+        display: block;
+        padding: 4px 8px 6px;
+        color: var(--faint);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .slash-option {
+        display: grid;
+        grid-template-columns: minmax(120px, 180px) 1fr;
+        gap: 12px;
+        align-items: baseline;
+        padding: 7px 8px;
+        border-radius: 5px;
+        cursor: pointer;
+        border: 1px solid transparent;
+      }
+      .slash-option:hover,
+      .slash-option.selected {
+        background: rgba(217,119,69,0.14);
+        border-color: rgba(255,154,95,0.24);
+      }
+      .slash-usage { color: #ffd1ad; font-weight: 700; white-space: nowrap; }
+      .slash-desc { color: var(--muted); min-width: 0; }
+      .slash-empty { color: var(--faint); padding: 8px; }
+
+      .term-output:focus { outline: none; }
+
+      /* ── 权限栏 ── */
+      .perm-bar {
+        position: absolute; bottom: 0; left: 0; right: 0;
+        z-index: 100; background: rgba(23,20,16,0.96);
+        border-top: 1px solid rgba(255,154,95,0.18);
+        padding: 8px 16px; display: none; font-size: 13px;
+      }
+      .perm-bar.show { display: block; }
+      .perm-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .perm-prompt { color: var(--gold); }
+      .perm-detail { color: #52525b; font-size: 12px; }
+      .perm-plan {
+        margin-top: 8px; padding: 10px; max-height: 260px; overflow: auto;
+        white-space: pre-wrap; word-break: break-word; color: var(--text);
+        background: rgba(0,0,0,0.28); border: 1px solid rgba(255,154,95,0.18); border-radius: 8px;
+      }
+      .perm-plan-path { color: var(--muted); font-size: 11px; margin-top: 4px; }
+      .perm-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; justify-content: flex-end; }
+      .perm-btn {
+        padding: 2px 12px; border-radius: 3px; font-family: inherit;
+        font-size: 12px; cursor: pointer; border: 1px solid; max-width: 360px;
+      }
+      .perm-btn-yes { background: rgba(34,197,94,0.1); color: #4ade80; border-color: rgba(34,197,94,0.3); }
+      .perm-btn-yes:hover { background: rgba(34,197,94,0.2); }
+      .perm-btn-no { background: rgba(239,68,68,0.08); color: #f87171; border-color: rgba(239,68,68,0.25); }
+      .perm-btn-no:hover { background: rgba(239,68,68,0.15); }
+      .perm-result { margin-top: 4px; font-size: 12px; }
+      .perm-result.allowed { color: #4ade80; }
+      .perm-result.denied { color: #f87171; }
+
+      /* badge */
+      .badge {
+        position: absolute; top: 72px; right: 28px; z-index: 10;
+        display: flex; align-items: center; gap: 5px;
+        padding: 3px 8px; border-radius: 999px;
+        background: rgba(23,20,16,0.72); border: 1px solid rgba(230,197,150,0.12);
+        font-size: 10px; color: var(--muted); user-select: none;
+        backdrop-filter: blur(14px);
+      }
+      .badge .dot {
+        width: 5px; height: 5px; border-radius: 50%;
+        background: var(--orange-hot); animation: pulse 2s ease-in-out infinite;
+      }
+      .badge.connected .dot { background: #22c55e; animation: none; }
+      .badge.error .dot { background: #ef4444; animation: none; }
+      .badge.closed .dot { background: #52525b; animation: none; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+      .term-output::-webkit-scrollbar { width: 5px; }
+      .term-output::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+
+      /* Claude Code exact-ish skin: no decoration, no glass, no motion-heavy chrome */
+      :root {
+        --bg: #0b0b0b;
+        --panel: #111111;
+        --panel-strong: #141414;
+        --line: #2a2a2a;
+        --line-strong: #3a3a3a;
+        --text: #d6d3ce;
+        --muted: #8a8883;
+        --faint: #5f5d58;
+        --orange: #d97745;
+        --orange-hot: #d97745;
+        --gold: #c69058;
+        --green: #6a9955;
+        --red: #d16969;
+        --blue: #6b9bd2;
+      }
+      body {
+        background: var(--bg) !important;
+        color: var(--text);
+      }
+      body::before,
+      body::after,
+      .sidebar::before,
+      .terminal-chrome,
+      .brand-block { display: none !important; }
+      * { animation: none !important; transition-duration: 0ms !important; }
+
+      .sidebar {
+        width: 244px;
+        min-width: 244px;
+        background: #101010;
+        border-right: 1px solid #242424;
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+      .sidebar-header {
+        padding: 10px 12px;
+        border-bottom: 1px solid #242424;
+      }
+      .sidebar-header h2 {
+        color: #7c7a74;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: none;
+      }
+      .sidebar-actions { gap: 6px; }
+      .btn-new,
+      .btn-logout {
+        background: #171717;
+        color: #aaa7a0;
+        border: 1px solid #2c2c2c;
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
+        transform: none !important;
+      }
+      .btn-new:hover,
+      .btn-logout:hover { background: #202020; color: #d6d3ce; }
+      .session-list { padding: 6px; }
+      .session-item {
+        padding: 7px 8px;
+        margin-bottom: 1px;
+        border-radius: 5px;
+        background: transparent;
+        border: 1px solid transparent;
+        transform: none !important;
+        box-shadow: none;
+      }
+      .session-item:hover { background: #171717; border-color: transparent; transform: none; }
+      .session-item.active {
+        background: #1b1b1b;
+        border-color: #333333;
+        box-shadow: none;
+      }
+      .session-title { color: #d6d3ce; font-weight: 500; }
+      .session-meta { color: #66635e; }
+      .session-usage { color: #a88763; }
+
+      .main {
+        background: #0b0b0b;
+      }
+      .main::before { display: none; }
+      .term-output {
+        padding: 12px 16px;
+        background: #0b0b0b;
+      }
+      .term-line { color: #d6d3ce; }
+      .prompt {
+        color: #d97745;
+        text-shadow: none;
+      }
+      .tool-line { color: #c69058; }
+      .tool-ok { color: #6a9955; }
+      .tool-err,
+      .tool-denied { color: #d16969; }
+      .bash-summary,
+      .bash-output,
+      .tool-detail,
+      .thinking-meta,
+      .thinking-preview { color: #7c7a74; }
+      .thinking-wrap {
+        border-left: 1px solid #2a2a2a;
+        opacity: 1;
+      }
+      .thinking-label { color: #8a8883; }
+      .thinking-detail {
+        background: #101010;
+        border: 1px solid #242424;
+        border-radius: 4px;
+        color: #8a8883;
+      }
+      .todo-list { border-left-color: #2a2a2a; }
+      .todo-content { color: #d6d3ce; }
+
+      .command-result {
+        margin: 4px 0;
+        padding: 0 0 0 12px;
+        border-left: 1px solid #3a332d;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+      .command-title {
+        color: #d97745;
+        font-weight: 600;
+      }
+      .command-body { color: #8a8883; }
+      .command-error { background: transparent; border-left-color: #5a2f2f; }
+      .command-error .command-title { color: #d16969; }
+
+      .quota-track {
+        height: 7px;
+        background: #171717;
+        border: 1px solid #2a2a2a;
+      }
+      .quota-fill {
+        background: #d97745;
+        box-shadow: none;
+      }
+      .quota-row.quota-warn .quota-fill { background: #c69058; }
+      .quota-row.quota-exceeded .quota-fill { background: #d16969; }
+
+      .md-block { color: #d6d3ce; }
+      .md-block h1,
+      .md-block h2,
+      .md-block h3 { color: #e8e3d8; font-weight: 600; }
+      .md-block code {
+        background: #171717;
+        color: #d9a36c;
+        border-radius: 3px;
+      }
+      .md-block pre {
+        background: #101010;
+        border: 1px solid #242424;
+        border-radius: 4px;
+      }
+      .md-block blockquote { border-left-color: #3a332d; color: #8a8883; }
+      .md-block a { color: #d9a36c; }
+
+      .input-row { margin-top: 0; padding-right: 16px; }
+      .input-line {
+        padding: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+      }
+      .input-line .prompt { color: #d97745; }
+      .input-line input {
+        color: #d6d3ce;
+        caret-color: #d97745;
+      }
+      .slash-menu {
+        background: #111111;
+        border: 1px solid #303030;
+        border-radius: 6px;
+        box-shadow: 0 14px 40px rgba(0,0,0,.45);
+      }
+      .slash-menu::before { color: #66635e; }
+      .slash-option { border-radius: 4px; }
+      .slash-option:hover,
+      .slash-option.selected {
+        background: #1d1d1d;
+        border-color: #333333;
+      }
+      .slash-usage { color: #d9a36c; font-weight: 600; }
+      .slash-desc { color: #8a8883; }
+
+      .perm-bar {
+        background: #111111;
+        border-top: 1px solid #2a2a2a;
+      }
+      .perm-prompt { color: #c69058; }
+      .perm-btn { border-radius: 4px; }
+      .badge {
+        top: 8px;
+        right: 12px;
+        background: #111111;
+        border: 1px solid #2a2a2a;
+        color: #66635e;
+        backdrop-filter: none;
+      }
+      .badge .dot { background: #d97745; }
+
+      .task-panel {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        width: min(360px, calc(100vw - 34px));
+        max-height: 34vh;
+        overflow: hidden;
+        z-index: 66;
+        display: none;
+        border: 1px solid rgba(230,197,150,0.13);
+        border-radius: 16px;
+        background: rgba(16,14,11,0.88);
+        box-shadow: 0 20px 54px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.04);
+        backdrop-filter: blur(16px);
+      }
+      .task-panel.visible { display: block; }
+      .task-panel-head { display:flex; align-items:center; justify-content:space-between; padding: 9px 11px; border-bottom: 1px solid rgba(230,197,150,0.1); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+      .task-panel-head strong { color: var(--gold); font-size: 11px; }
+      .task-panel-body { padding: 7px; overflow-y:auto; max-height: calc(34vh - 36px); }
+      .task-item { padding: 7px 8px; border-radius: 10px; color: var(--muted); border: 1px solid transparent; background: rgba(255,255,255,0.025); margin-bottom: 5px; }
+      .task-item.in_progress { color: #ffd1ad; border-color: rgba(255,154,95,.24); background: rgba(217,119,69,.09); }
+      .task-item.completed { opacity:.58; }
+      .task-title { color: var(--text); font-size: 11px; font-weight: 700; }
+      .task-meta { margin-top: 2px; font-size: 10px; color: var(--faint); }
+      .task-blocked { color: #f0bf6a; }
+      .task-empty { padding: 12px; color: var(--faint); font-size: 11px; }
+      .workspace-banner { position: fixed; right: 18px; bottom: calc(18px + 34vh + 10px); width: min(360px, calc(100vw - 34px)); z-index: 67; display:none; padding: 8px 10px; border-radius: 12px; border: 1px solid rgba(91,192,190,.22); background: rgba(8,22,24,.88); color: #9ee7e3; font-size: 11px; box-shadow: 0 14px 36px rgba(0,0,0,.28); }
+      .workspace-banner.visible { display:block; }
+      .workspace-banner.preserved { color: #f0bf6a; border-color: rgba(240,191,106,.24); background: rgba(30,22,10,.9); }
+
+      /* Buddy: move out of the prompt row into a fixed viewport-centered watcher.
+         This intentionally uses a different "pixel tarot" style while keeping
+         the rest of the terminal Claude-minimal. */
+      .companion-dock {
+        top: 50%;
+        left: auto;
+        right: clamp(18px, 3vw, 42px);
+        transform: translateY(-50%);
+        align-items: flex-start;
+        filter: drop-shadow(0 18px 32px rgba(0,0,0,.42));
+      }
+      .companion-dock.visible { display: flex; }
+      .companion-card-mini {
+        background: linear-gradient(180deg, #17130f, #0d0c0a);
+        border-color: color-mix(in srgb, var(--companion-accent, #d97745) 50%, #2b241c);
+      }
+      .companion-bubble { background: #11100d; }
+      .companion-bubble.show { animation: companion-pop .18s ease-out !important; }
+      .companion-hearts.show { animation: companion-hearts 2.5s ease-out !important; }
+      .btn-integration {
+        padding: 3px 8px;
+        border-radius: 5px;
+        border: 1px solid rgba(0, 186, 173, .28);
+        color: #b8fff7;
+        background:
+          radial-gradient(circle at 12% 20%, rgba(0, 186, 173, .18), transparent 38%),
+          linear-gradient(135deg, rgba(0, 186, 173, .10), rgba(255,255,255,.025));
+        cursor: pointer;
+        font-size: 11px;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        transition: transform .16s ease, border-color .16s ease, background .16s ease;
+      }
+      .btn-integration:hover { transform: translateY(-1px); border-color: rgba(0, 224, 208, .48); background: linear-gradient(135deg, rgba(0, 186, 173, .17), rgba(255,255,255,.04)); }
+      .btn-integration .state { color: var(--faint); font-size: 9px; }
+      .btn-integration.connected .state { color: var(--green); }
+      .integration-modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(8, 7, 5, .68);
+        backdrop-filter: blur(14px);
+      }
+      .integration-modal.show { display: flex; }
+      .integration-card {
+        width: min(760px, 100%);
+        max-height: min(720px, calc(100vh - 48px));
+        overflow: auto;
+        border-radius: 24px;
+        border: 1px solid rgba(0, 224, 208, .24);
+        background:
+          radial-gradient(circle at 18% 0%, rgba(0, 224, 208, .18), transparent 34%),
+          radial-gradient(circle at 90% 18%, rgba(240,191,106,.12), transparent 30%),
+          linear-gradient(180deg, rgba(26, 24, 19, .98), rgba(12, 11, 9, .98));
+        box-shadow: 0 40px 120px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.06);
+      }
+      .integration-head { padding: 20px 22px; border-bottom: 1px solid rgba(230,197,150,.12); display:flex; align-items:flex-start; gap:14px; }
+      .integration-logo { width: 42px; height: 42px; border-radius: 14px; display:grid; place-items:center; color:#04221f; font-weight:900; background: conic-gradient(from 180deg, #b8fff7, #00baaD, #f0bf6a, #b8fff7); box-shadow: 0 0 36px rgba(0,224,208,.26); }
+      .integration-title { font-size: 17px; font-weight: 850; color:#f4fff8; letter-spacing:-.03em; }
+      .integration-sub { margin-top:3px; color: var(--muted); font-size: 12px; line-height:1.5; }
+      .integration-close { margin-left:auto; border:1px solid rgba(230,197,150,.13); background:rgba(255,255,255,.035); color:var(--muted); width:32px; height:32px; border-radius:10px; cursor:pointer; }
+      .integration-close:hover { color:#fff; background:rgba(255,255,255,.07); }
+      .integration-body { padding: 18px 22px 22px; display:grid; gap:14px; }
+      .integration-status { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
+      .integration-stat { border:1px solid rgba(230,197,150,.12); background:rgba(0,0,0,.18); border-radius:14px; padding:11px; }
+      .integration-stat .k { color:var(--faint); font-size:10px; letter-spacing:.12em; text-transform:uppercase; }
+      .integration-stat .v { color:var(--text); font-size:12px; margin-top:5px; word-break:break-word; }
+      .integration-stat.connected .v { color: var(--green); }
+      .integration-form { border:1px solid rgba(230,197,150,.12); background:rgba(255,255,255,.025); border-radius:18px; padding:14px; display:grid; gap:12px; }
+      .integration-field label { display:flex; justify-content:space-between; color:#f1dfc3; font-size:12px; font-weight:700; margin-bottom:6px; }
+      .integration-field label span { color:var(--faint); font-weight:500; }
+      .integration-field input, .integration-field textarea {
+        width:100%; border:1px solid rgba(230,197,150,.14); border-radius:12px; background:#0b0a08; color:var(--text); padding:10px 11px; outline:none; font-family:var(--mono); font-size:12px;
+      }
+      .integration-field input:focus, .integration-field textarea:focus { border-color:rgba(0,224,208,.52); box-shadow:0 0 0 3px rgba(0,224,208,.09); }
+      .integration-field textarea { min-height:70px; resize:vertical; }
+      .integration-help { color:var(--muted); font-size:11px; line-height:1.55; }
+      .integration-help code { color:#cffffa; font-family:var(--mono); }
+      .integration-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+      .integration-action { border:1px solid rgba(230,197,150,.14); border-radius:10px; padding:8px 12px; background:rgba(255,255,255,.04); color:var(--text); cursor:pointer; }
+      .integration-action.primary { border-color:rgba(0,224,208,.45); background:linear-gradient(180deg, rgba(0,224,208,.20), rgba(0,186,173,.10)); color:#cffffa; }
+      .integration-action.danger { border-color:rgba(255,107,95,.28); color:#ffb0a9; }
+      .integration-message { color:var(--muted); font-size:11px; min-height:18px; }
+      .integration-log-panel { border:1px solid rgba(230,197,150,.12); background:rgba(0,0,0,.22); border-radius:14px; padding:10px; display:grid; gap:8px; }
+      .integration-log-head { display:flex; justify-content:space-between; gap:10px; align-items:center; color:#f1dfc3; font-size:12px; font-weight:750; }
+      .integration-log-hint { color:var(--faint); font-size:11px; font-weight:500; }
+      .integration-logs { margin:0; max-height:180px; overflow:auto; white-space:pre-wrap; word-break:break-word; color:#d7c8ad; font-family:var(--mono); font-size:11px; line-height:1.45; }
+      @media (max-width: 720px) { .integration-status { grid-template-columns: 1fr; } }
+      @media (max-width: 980px) {
+        .companion-dock { right: 10px; transform: translateY(-50%) scale(.92); transform-origin: right center; }
+        .task-panel { right: 10px; bottom: 10px; max-height: 28vh; }
+      }
+      </style>
+  </head>
+  <body>
+    <div class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">
+          <div class="brand-glyph">✦</div>
+          <div>
+            <div class="brand-title">MyAgent Code</div>
+            <div class="brand-sub">Claude-style terminal</div>
+          </div>
+        </div>
+        <div class="brand-ticker">
+          <span class="ticker-chip live">runtime</span>
+          <span class="ticker-chip">quota</span>
+          <span class="ticker-chip">sessions</span>
+        </div>
+      </div>
+      <div class="sidebar-header">
+        <h2>Sessions</h2>
+        <div class="sidebar-actions">
+          <button class="btn-integration" id="btnFeishu" type="button" title="飞书接入">
+            <span>飞书</span>
+            <span class="state" id="feishuMenuState">未连</span>
+          </button>
+          <button class="btn-new" id="btnNew">+ New</button>
+          <button class="btn-logout" id="btnLogout">Logout</button>
+        </div>
+      </div>
+      <div class="session-list" id="sessionList"></div>
+    </div>
+
+    <div class="main">
+      <div class="terminal-chrome">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="chrome-title"><strong>claude-code</strong> / my-agent-core</div>
+        <div class="chrome-spacer"></div>
+        <div class="chrome-pill">streaming events</div>
+        <div class="chrome-pill">isolated session</div>
+      </div>
+      <div class="term-output" id="termOutput" tabindex="0"></div>
+      <div class="workspace-banner" id="workspaceBanner" aria-live="polite"></div>
+      <div class="task-panel" id="taskPanel" aria-live="polite"></div>
+      <div class="companion-dock" id="companionDock" aria-live="polite"></div>
+      <div id="badge" class="badge" style="display:none">
+        <span class="dot"></span>
+        <span id="badgeText">connecting</span>
+      </div>
+      <div class="perm-bar" id="permBar">
+        <div class="perm-line">
+          <span class="perm-prompt" id="permPrompt">? Permission required</span>
+          <span class="perm-detail" id="permDetail"></span>
+          <div class="perm-btns" id="permBtns">
+            <button class="perm-btn perm-btn-no" id="permNo">Deny</button>
+            <button class="perm-btn perm-btn-yes" id="permYes">Allow</button>
+          </div>
+        </div>
+        <div class="perm-result" id="permResult" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="integration-modal" id="feishuModal" aria-hidden="true">
+      <div class="integration-card" role="dialog" aria-modal="true" aria-labelledby="feishuModalTitle">
+        <div class="integration-head">
+          <div class="integration-logo">飞</div>
+          <div>
+            <div class="integration-title" id="feishuModalTitle">按当前用户接入飞书</div>
+            <div class="integration-sub">Token 会绑定到当前 MyAgent 用户与组织，Agent 调用 FeishuApi 时只读取这个用户自己的授权。</div>
+          </div>
+          <button class="integration-close" id="feishuClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="integration-body">
+          <div class="integration-status">
+            <div class="integration-stat" id="feishuStatusCard"><div class="k">状态</div><div class="v" id="feishuStatusText">加载中</div></div>
+            <div class="integration-stat"><div class="k">用户</div><div class="v" id="feishuUserText">-</div></div>
+            <div class="integration-stat"><div class="k">过期时间</div><div class="v" id="feishuExpiresText">-</div></div>
+            <div class="integration-stat"><div class="k">消息桥</div><div class="v" id="feishuBridgeText">未启动</div></div>
+          </div>
+          <div class="integration-form">
+            <div class="integration-field">
+              <label>App 凭证 <span>推荐，OpenClaw 风格</span></label>
+              <textarea id="feishuAppCredential" autocomplete="off" placeholder='支持粘贴 JSON：{"app_id":"cli_xxx","app_secret":"xxx"}，或两行：&#10;cli_xxx&#10;app_secret'></textarea>
+            </div>
+            <div class="integration-field">
+              <label>Access Token <span>高级：User Access Token</span></label>
+              <input id="feishuAccessToken" type="password" autocomplete="off" placeholder="u-... / t-..." />
+            </div>
+            <div class="integration-field">
+              <label>Refresh Token <span>可选</span></label>
+              <input id="feishuRefreshToken" type="password" autocomplete="off" placeholder="用于后续刷新（当前仅保存）" />
+            </div>
+            <div class="integration-field">
+              <label>Expires In <span>秒，可选</span></label>
+              <input id="feishuExpiresIn" type="number" min="1" placeholder="例如 7200" />
+            </div>
+            <div class="integration-field">
+              <label>Scopes <span>逗号分隔，可选</span></label>
+              <input id="feishuScopes" placeholder="im:message, doc:read" />
+            </div>
+            <div class="integration-help">
+              推荐按 OpenClaw 的方式接入：在飞书开放平台自建应用，粘贴 <code>App ID + App Secret</code>。支持 JSON、<code>app_id:app_secret</code>、两行、或 key=value 格式。User Access Token 仅保留给需要用户身份 API 的高级场景。
+            </div>
+            <div class="integration-actions">
+              <button class="integration-action primary" id="feishuSave" type="button">保存绑定</button>
+              <button class="integration-action" id="feishuTest" type="button">测试连接</button>
+              <button class="integration-action" id="feishuBridgeStart" type="button">启动收消息</button>
+              <button class="integration-action" id="feishuBridgeStop" type="button">停止收消息</button>
+              <button class="integration-action" id="feishuRefresh" type="button">刷新状态</button>
+              <button class="integration-action" id="feishuLogsRefresh" type="button">刷新诊断日志</button>
+              <button class="integration-action danger" id="feishuDisconnect" type="button">解除绑定</button>
+              <span class="integration-message" id="feishuMessage"></span>
+            </div>
+            <div class="integration-log-panel">
+              <div class="integration-log-head">
+                <span>消息桥诊断日志</span>
+                <span class="integration-log-hint">启动后给机器人发一句话，再刷新这里</span>
+              </div>
+              <pre class="integration-logs" id="feishuBridgeLogs">暂无日志</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+    <script>
+    (function () {
+      var API = '/terminal/api';
+      var termOutput = document.getElementById('termOutput');
+      var taskPanel = document.getElementById('taskPanel');
+      var companionDock = document.getElementById('companionDock');
+      var badge = document.getElementById('badge');
+      var badgeText = document.getElementById('badgeText');
+      var sessionList = document.getElementById('sessionList');
+      var btnNew = document.getElementById('btnNew');
+      var btnLogout = document.getElementById('btnLogout');
+      var btnFeishu = document.getElementById('btnFeishu');
+      var feishuMenuState = document.getElementById('feishuMenuState');
+      var feishuModal = document.getElementById('feishuModal');
+      var feishuClose = document.getElementById('feishuClose');
+      var feishuStatusCard = document.getElementById('feishuStatusCard');
+      var feishuStatusText = document.getElementById('feishuStatusText');
+      var feishuUserText = document.getElementById('feishuUserText');
+      var feishuExpiresText = document.getElementById('feishuExpiresText');
+      var feishuBridgeText = document.getElementById('feishuBridgeText');
+      var feishuAppCredential = document.getElementById('feishuAppCredential');
+      var feishuAccessToken = document.getElementById('feishuAccessToken');
+      var feishuRefreshToken = document.getElementById('feishuRefreshToken');
+      var feishuExpiresIn = document.getElementById('feishuExpiresIn');
+      var feishuScopes = document.getElementById('feishuScopes');
+      var feishuSave = document.getElementById('feishuSave');
+      var feishuTest = document.getElementById('feishuTest');
+      var feishuBridgeStart = document.getElementById('feishuBridgeStart');
+      var feishuBridgeStop = document.getElementById('feishuBridgeStop');
+      var feishuRefresh = document.getElementById('feishuRefresh');
+      var feishuLogsRefresh = document.getElementById('feishuLogsRefresh');
+      var feishuDisconnect = document.getElementById('feishuDisconnect');
+      var feishuMessage = document.getElementById('feishuMessage');
+      var feishuBridgeLogs = document.getElementById('feishuBridgeLogs');
+      var permBar = document.getElementById('permBar');
+      var permPrompt = document.getElementById('permPrompt');
+      var permDetail = document.getElementById('permDetail');
+      var permBtns = document.getElementById('permBtns');
+      var permResult = document.getElementById('permResult');
+      var permYes = document.getElementById('permYes');
+      var permNo = document.getElementById('permNo');
+
+      var currentSessionId = null;
+      var ws = null;
+      var agentRunning = false;
+
+      // 行编辑状态
+      var lineBuffer = '';
+      var inputRowEl = null;   // input-row div
+      var inputEl = null;     // 真实 <input> 元素
+      var commandHistory = [];
+      var historyIndex = null;
+      var historyDraft = '';
+      var abortRequested = false;
+      var slashMenuEl = null;
+      var slashSelectedIndex = 0;
+      var slashCommands = [
+        { name: '/help', usage: '/help', description: '显示可用命令' },
+        { name: '/status', usage: '/status', description: '显示当前状态' },
+        { name: '/clear', usage: '/clear', description: '清空当前 session 聊天历史' },
+        { name: '/plan', usage: '/plan', description: '进入 Plan Mode，先写计划并审批后再实现' },
+        { name: '/memory', usage: '/memory [show|path|clear]', description: '查看 session memory' },
+        { name: '/skills', usage: '/skills [reload|show <name>]', description: '列出、刷新或查看本地 skills' },
+        { name: '/model', usage: '/model [list|current|<model_id>|<provider> <model_id>]', description: '查看或切换当前 session 使用的模型' },
+        { name: '/permissions', usage: '/permissions [default|acceptEdits|plan|bypassPermissions|yolo]', description: '查看或切换权限模式' },
+        { name: '/yolo', usage: '/yolo', description: '切换到 YOLO 权限模式（等价于 /permissions yolo）' },
+        { name: '/sandbox', usage: '/sandbox [enable|disable|open|closed|auto-on|auto-off|exclude <pattern>|unexclude <pattern>]', description: '查看或配置 Bash 沙箱' },
+        { name: '/quota', usage: '/quota', description: '查看当前用户、组织、额度与用量' },
+        { name: '/buddy', usage: '/buddy [status|pet|mute|unmute]', description: '唤醒、查看或互动你的终端伙伴' },
+        { name: '/config', usage: '/config', description: '显示运行配置' },
+        { name: '/abort', usage: '/abort', description: '中断运行中的任务' },
+      ];
+      var feishuStatus = null;
+      var currentPermissionOptions = [];
+      var currentPermissionKey = '';
+      var permissionAwaiting = false;
+      var pendingPermissionResponse = null;
+      var companionState = null;
+      var companionFrame = 0;
+      var companionReactionTimer = null;
+      var companionFadeTimer = null;
+      var companionTickTimer = null;
+      var companionPendingReaction = '';
+      var taskState = [];
+      var taskListId = '';
+      var workspaceState = null;
+
+      // 当前流式 markdown
+      var currentMdEl = null;
+      var currentTextBuffer = '';
+      var currentThinkingWrap = null;
+      var currentThinkingBuffer = '';
+      var modelStatusEl = null;
+      var agentWatchdogTimer = null;
+      var reconnectTimer = null;
+      var reconnectAttempt = 0;
+      var intentionalClose = false;
+      var lastAgentEventAt = 0;
+      var AGENT_IDLE_TIMEOUT_MS = 150000;
+
+      function setBadge(state, text) {
+        badge.className = 'badge ' + state;
+        badgeText.textContent = text;
+      }
+
+      function hasMarked() { return typeof window.marked !== 'undefined'; }
+      function hasHljs() { return typeof window.hljs !== 'undefined'; }
+
+      if (hasMarked()) {
+        marked.setOptions({
+          highlight: function (code, lang) {
+            if (!hasHljs()) return escapeHtml(code);
+            if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
+            return hljs.highlightAuto(code).value;
+          },
+          breaks: true,
+          gfm: true,
+        });
+      }
+
+      function renderMarkdown(text) {
+        if (!hasMarked()) return escapeHtml(text || '');
+        return marked.parse(text || '');
+      }
+
+      function highlightCodeBlocks(root) {
+        if (!hasHljs()) return;
+        root.querySelectorAll('pre code').forEach(function (b) { hljs.highlightElement(b); });
+      }
+
+      // ── 输出工具函数 ──
+      function scrollBottom() { termOutput.scrollTop = termOutput.scrollHeight; }
+
+      function appendLine(html, cls) {
+        var div = document.createElement('div');
+        div.className = 'term-line' + (cls ? ' ' + cls : '');
+        div.innerHTML = html;
+        appendBeforeInput(div);
+        scrollBottom();
+        return div;
+      }
+
+      function appendRaw(text) {
+        var div = document.createElement('div');
+        div.className = 'term-line';
+        div.textContent = text;
+        appendBeforeInput(div);
+        scrollBottom();
+      }
+
+      function appendCommandResult(title, content, isError, metadata) {
+        var wrap = document.createElement('div');
+        wrap.className = 'command-result' + (isError ? ' command-error' : '');
+        var head = document.createElement('div');
+        head.className = 'command-title';
+        head.textContent = (isError ? '✗ ' : '› ') + (title || 'Command');
+        var body = document.createElement('div');
+        body.className = 'command-body';
+        body.textContent = content || '';
+        wrap.appendChild(head);
+        wrap.appendChild(body);
+        if (!isError && metadata && Array.isArray(metadata.quota_bars) && metadata.quota_bars.length) {
+          wrap.appendChild(renderQuotaBars(metadata.quota_bars));
+        }
+        appendBeforeInput(wrap);
+        scrollBottom();
+      }
+
+      function renderQuotaBars(bars) {
+        var box = document.createElement('div');
+        box.className = 'quota-bars';
+        bars.forEach(function (bar) {
+          var row = document.createElement('div');
+          var status = bar.status || 'ok';
+          row.className = 'quota-row quota-' + status;
+
+          var label = document.createElement('div');
+          label.className = 'quota-label';
+          label.textContent = bar.label || [bar.scope_type, bar.window, bar.metric].filter(Boolean).join(' ');
+
+          var track = document.createElement('div');
+          track.className = 'quota-track';
+          var fill = document.createElement('div');
+          fill.className = 'quota-fill';
+          var percent = Math.max(0, Math.min(100, Number(bar.percent || 0)));
+          fill.style.width = percent + '%';
+          track.appendChild(fill);
+
+          var value = document.createElement('div');
+          value.className = 'quota-value';
+          value.textContent = (bar.percent_text || (percent.toFixed(1) + '%')) + ' · ' +
+            (bar.used_text || bar.used || 0) + '/' + (bar.limit_text || bar.limit || '-') +
+            ' · left ' + (bar.remaining_text || bar.remaining || 0);
+
+          row.appendChild(label);
+          row.appendChild(track);
+          row.appendChild(value);
+          box.appendChild(row);
+        });
+        return box;
+      }
+
+      function ensureCompanionTimer() {
+        if (companionTickTimer) return;
+        companionTickTimer = setInterval(function () {
+          companionFrame += 1;
+          renderCompanionDock();
+        }, 500);
+      }
+
+      function companionDockEl() { return companionDock; }
+
+      function setCompanionState(companion, action) {
+        companionState = companion || null;
+        if (companionState) ensureCompanionTimer();
+        renderCompanionDock();
+        if (action === 'pet') petCompanion();
+      }
+
+      function renderCompanionDock() {
+        var dock = companionDockEl();
+        if (!dock) return;
+        if (!companionState || companionState.muted) {
+          dock.classList.remove('visible');
+          dock.innerHTML = '';
+          return;
+        }
+        var frames = companionState.sprite_frames || [];
+        var frame = frames.length ? frames[companionFrame % frames.length] : [];
+        dock.style.setProperty('--companion-accent', companionState.accent || '#d97745');
+        var oldBubble = dock.querySelector('.companion-bubble');
+        var bubbleClass = oldBubble ? oldBubble.className : 'companion-bubble';
+        var bubbleText = oldBubble ? oldBubble.textContent : '';
+        dock.classList.add('visible');
+        dock.innerHTML = '';
+        var bubbleEl = document.createElement('div');
+        bubbleEl.className = bubbleClass;
+        bubbleEl.textContent = bubbleText;
+        var card = document.createElement('div');
+        card.className = 'companion-card-mini';
+        var hearts = document.createElement('div');
+        hearts.className = 'companion-hearts';
+        hearts.textContent = '♥  ♥  ♥';
+        var sprite = document.createElement('div');
+        sprite.className = 'companion-sprite';
+        sprite.textContent = frame.join('\n');
+        var face = document.createElement('div');
+        face.className = 'companion-face';
+        face.textContent = companionState.face || '';
+        var name = document.createElement('div');
+        name.className = 'companion-name';
+        name.innerHTML = '<strong>' + escapeHtml(companionState.name || 'buddy') + '</strong> ' + escapeHtml(companionState.rarity_stars || '★');
+        card.appendChild(hearts);
+        card.appendChild(sprite);
+        card.appendChild(face);
+        card.appendChild(name);
+        dock.appendChild(bubbleEl);
+        dock.appendChild(card);
+      }
+
+      function showCompanionReaction(text) {
+        if (!text || !companionState || companionState.muted) return;
+        renderCompanionDock();
+        var dock = companionDockEl();
+        var bubble = dock ? dock.querySelector('.companion-bubble') : null;
+        if (!bubble) { companionPendingReaction = text; return; }
+        bubble.textContent = text;
+        bubble.className = 'companion-bubble show';
+        clearTimeout(companionReactionTimer);
+        clearTimeout(companionFadeTimer);
+        companionFadeTimer = setTimeout(function () { bubble.classList.add('fade'); }, 7000);
+        companionReactionTimer = setTimeout(function () {
+          bubble.className = 'companion-bubble';
+          bubble.textContent = '';
+        }, 10000);
+      }
+
+      function petCompanion() {
+        renderCompanionDock();
+        var dock = companionDockEl();
+        var hearts = dock ? dock.querySelector('.companion-hearts') : null;
+        if (!hearts) return;
+        hearts.classList.remove('show');
+        void hearts.offsetWidth;
+        hearts.classList.add('show');
+      }
+
+      function setTaskState(tasks, listId) {
+        taskState = Array.isArray(tasks) ? tasks : [];
+        taskListId = listId || taskListId || '';
+        var active = taskState.find(function (t) { return t.status === 'in_progress' && t.metadata && t.metadata.workspace; });
+        if (active && active.metadata && active.metadata.workspace) setWorkspaceState(active.metadata.workspace);
+        renderTaskPanel();
+      }
+
+      function setWorkspaceState(workspace) {
+        workspaceState = workspace || null;
+        renderWorkspaceBanner();
+      }
+
+      function renderWorkspaceBanner() {
+        var el = document.getElementById('workspaceBanner');
+        if (!el) return;
+        if (!workspaceState || !workspaceState.status || workspaceState.status === 'removed') {
+          el.className = 'workspace-banner';
+          el.textContent = '';
+          return;
+        }
+        var status = String(workspaceState.status || 'active');
+        var text = status === 'active'
+          ? 'Isolated workspace active for this task'
+          : status === 'preserved'
+            ? 'Task workspace preserved because it contains changes'
+            : 'Isolated workspace: ' + status;
+        el.className = 'workspace-banner visible ' + (status === 'preserved' ? 'preserved' : '');
+        el.textContent = text;
+      }
+
+      function renderTaskPanel() {
+        if (!taskPanel) return;
+        if (!taskState.length) {
+          taskPanel.classList.remove('visible');
+          taskPanel.innerHTML = '';
+          return;
+        }
+        var completed = taskState.filter(function (t) { return t.status === 'completed'; }).length;
+        var inProgress = taskState.filter(function (t) { return t.status === 'in_progress'; }).length;
+        var unresolved = {};
+        taskState.forEach(function (t) { if (t.status !== 'completed') unresolved[t.id] = true; });
+        var ordered = taskState.slice().sort(function (a, b) {
+          var rank = { in_progress: 0, pending: 1, completed: 2 };
+          return (rank[a.status] || 9) - (rank[b.status] || 9) || Number(a.id) - Number(b.id);
+        }).slice(0, 10);
+        taskPanel.classList.add('visible');
+        var html = '<div class="task-panel-head"><span><strong>' + taskState.length + '</strong> tasks</span><span>' + completed + ' done · ' + inProgress + ' active</span></div><div class="task-panel-body">';
+        ordered.forEach(function (t) {
+          var blockers = (t.blockedBy || []).filter(function (id) { return unresolved[id]; });
+          html += '<div class="task-item ' + escapeHtml(t.status || 'pending') + '">';
+          html += '<div class="task-title">#' + escapeHtml(t.id || '?') + ' ' + escapeHtml(t.subject || '') + '</div>';
+          html += '<div class="task-meta">' + escapeHtml(t.status || 'pending') + (t.owner ? ' · ' + escapeHtml(t.owner) : '') + (blockers.length ? ' · <span class="task-blocked">blocked by #' + blockers.map(escapeHtml).join(', #') + '</span>' : '') + '</div>';
+          html += '</div>';
+        });
+        if (taskState.length > ordered.length) html += '<div class="task-empty">+' + (taskState.length - ordered.length) + ' more tasks</div>';
+        html += '</div>';
+        taskPanel.innerHTML = html;
+      }
+
+      function loadTasks() {
+        if (!currentSessionId) return;
+        api('GET', '/sessions/' + encodeURIComponent(currentSessionId) + '/tasks').then(function (data) {
+          setTaskState(data.tasks || [], data.task_list_id || '');
+        }).catch(function () {});
+      }
+
+      function formatTokenCount(n) {
+        n = Number(n || 0);
+        if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+        return String(n);
+      }
+
+      function formatMoney(value, currency) {
+        value = Number(value || 0);
+        currency = currency || 'CNY';
+        var decimals = value >= 1 ? 2 : 4;
+        return currency + ' ' + value.toFixed(decimals);
+      }
+
+      function formatBillingSummary(billing) {
+        billing = billing || {};
+        var tokens = formatTokenCount(billing.total_tokens || 0);
+        var cacheTokens = Number(billing.cache_read_input_tokens || 0) + Number(billing.cache_creation_input_tokens || 0);
+        var cost = formatMoney(billing.total_cost || 0, billing.currency || 'CNY');
+        var models = Array.isArray(billing.model_ids) && billing.model_ids.length
+          ? ' · ' + billing.model_ids.slice(0, 2).join(',')
+          : '';
+        var cache = cacheTokens > 0 ? ' · cache ' + formatTokenCount(cacheTokens) : '';
+        return tokens + ' tok' + cache + ' · ' + cost + models;
+      }
+
+      function resetThinkingBlock() {
+        currentThinkingWrap = null;
+        currentThinkingBuffer = '';
+      }
+
+      function thinkingStats(text) {
+        var lines = text ? text.split('\n').length : 0;
+        return text.length + ' chars' + (lines > 1 ? ', ' + lines + ' lines' : '');
+      }
+
+      function thinkingPreview(text) {
+        var compact = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!compact) return 'streaming...';
+        return compact.length > 140 ? compact.slice(0, 140) + '...' : compact;
+      }
+
+      function updateThinkingLine(wrap) {
+        var text = wrap._thinkingBuffer || '';
+        var isOpen = wrap.classList.contains('open');
+        var chevron = wrap.querySelector('.thinking-chevron');
+        var meta = wrap.querySelector('.thinking-meta');
+        var preview = wrap.querySelector('.thinking-preview');
+        var detail = wrap.querySelector('.thinking-detail');
+        chevron.textContent = isOpen ? '▾' : '▸';
+        meta.textContent = thinkingStats(text);
+        preview.textContent = thinkingPreview(text);
+        detail.textContent = text;
+      }
+
+      function appendThinkingDelta(text) {
+        if (!text) return;
+        clearModelWaiting();
+        if (!currentThinkingWrap) {
+          var wrap = document.createElement('div');
+          wrap.className = 'thinking-wrap';
+          wrap._thinkingBuffer = '';
+
+          var line = document.createElement('div');
+          line.className = 'term-line thinking-line';
+
+          var chevron = document.createElement('span');
+          chevron.className = 'thinking-chevron';
+          chevron.textContent = '▸';
+
+          var label = document.createElement('span');
+          label.className = 'thinking-label';
+          label.textContent = 'thinking';
+
+          var meta = document.createElement('span');
+          meta.className = 'thinking-meta';
+          meta.textContent = '0 chars';
+
+          var preview = document.createElement('span');
+          preview.className = 'thinking-preview';
+          preview.textContent = 'streaming...';
+
+          line.appendChild(chevron);
+          line.appendChild(label);
+          line.appendChild(meta);
+          line.appendChild(preview);
+
+          var detail = document.createElement('div');
+          detail.className = 'thinking-detail';
+
+          wrap.appendChild(line);
+          wrap.appendChild(detail);
+          wrap.onclick = function () {
+            wrap.classList.toggle('open');
+            updateThinkingLine(wrap);
+          };
+          appendBeforeInput(wrap);
+          currentThinkingWrap = wrap;
+        }
+
+        currentThinkingBuffer += text;
+        currentThinkingWrap._thinkingBuffer = currentThinkingBuffer;
+        updateThinkingLine(currentThinkingWrap);
+        scrollBottom();
+      }
+
+      function setModelWaiting(turn) {
+        if (!modelStatusEl) {
+          modelStatusEl = appendLine('[model thinking' + (turn ? ' — turn ' + turn : '') + '...]', 'sys-line');
+        } else {
+          modelStatusEl.textContent = '[model thinking' + (turn ? ' — turn ' + turn : '') + '...]';
+          scrollBottom();
+        }
+      }
+
+      function clearModelWaiting() {
+        if (modelStatusEl) {
+          modelStatusEl.remove();
+          modelStatusEl = null;
+        }
+      }
+
+      function touchAgentEvent() {
+        lastAgentEventAt = Date.now();
+      }
+
+      function startAgentWatchdog() {
+        stopAgentWatchdog();
+        touchAgentEvent();
+        agentWatchdogTimer = setInterval(function () {
+          if (!agentRunning) return;
+          if (permissionAwaiting) {
+            touchAgentEvent();
+            return;
+          }
+          var idle = Date.now() - lastAgentEventAt;
+          if (idle < AGENT_IDLE_TIMEOUT_MS) return;
+          appendLine('[agent idle timeout — no backend events for ' + Math.round(idle / 1000) + 's, aborting turn]', 'err-line');
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'abort' }));
+          }
+          clearModelWaiting();
+          finalizeMdBlock();
+          agentRunning = false;
+          stopAgentWatchdog();
+          createInputRow();
+        }, 5000);
+      }
+
+      function stopAgentWatchdog() {
+        if (agentWatchdogTimer) {
+          clearInterval(agentWatchdogTimer);
+          agentWatchdogTimer = null;
+        }
+      }
+
+      // ── 终端内嵌真实输入框 ──
+      function createInputRow() {
+        if (inputRowEl && inputRowEl.parentNode === termOutput) {
+          inputRowEl.remove();
+        }
+        var row = document.createElement('div');
+        row.className = 'input-row';
+        row.innerHTML = '<div class="input-line"><span class="prompt">agent&gt;</span><input type="text" autocomplete="off" spellcheck="false" /><span class="input-cursor"></span></div>';
+        termOutput.appendChild(row);
+        inputRowEl = row;
+        inputEl = row.querySelector('input');
+        inputEl.placeholder = 'type /help for commands';
+        lineBuffer = '';
+        historyIndex = null;
+        historyDraft = '';
+        scrollBottom();
+        inputEl.focus();
+        renderCompanionDock();
+        if (companionPendingReaction) {
+          var pendingReaction = companionPendingReaction;
+          companionPendingReaction = '';
+          setTimeout(function () { showCompanionReaction(pendingReaction); }, 40);
+        }
+        updateSlashMenu();
+      }
+
+      function setInputValue(value) {
+        if (!inputEl) return;
+        inputEl.value = value || '';
+        lineBuffer = inputEl.value;
+        var end = inputEl.value.length;
+        try { inputEl.setSelectionRange(end, end); } catch (_) {}
+        updateSlashMenu();
+      }
+
+      function addCommandHistory(text) {
+        text = String(text || '').trim();
+        if (!text) return;
+        if (commandHistory[commandHistory.length - 1] === text) return;
+        commandHistory.push(text);
+        if (commandHistory.length > 200) commandHistory.shift();
+      }
+
+      function navigateCommandHistory(delta) {
+        if (!inputEl || !commandHistory.length) return false;
+        if (historyIndex === null) {
+          historyDraft = inputEl.value;
+          historyIndex = delta < 0 ? commandHistory.length - 1 : null;
+          if (historyIndex === null) return false;
+        } else {
+          historyIndex += delta;
+          if (historyIndex < 0) historyIndex = 0;
+          if (historyIndex >= commandHistory.length) {
+            historyIndex = null;
+            setInputValue(historyDraft);
+            return true;
+          }
+        }
+        setInputValue(commandHistory[historyIndex] || '');
+        return true;
+      }
+
+      function cancelCurrentInputLine() {
+        if (!inputEl || !inputEl.value) return false;
+        setInputValue('');
+        hideSlashMenu();
+        appendLine('^C', 'sys-line');
+        return true;
+      }
+
+      function abortRunningTurn() {
+        abortRequested = true;
+        if (isWsOpen()) ws.send(JSON.stringify({ type: 'abort' }));
+        appendLine('^C', 'sys-line');
+        clearModelWaiting();
+        finalizeMdBlock();
+        resetThinkingBlock();
+        stopAgentWatchdog();
+        agentRunning = false;
+        hideSlashMenu();
+        if (!inputRowEl) createInputRow();
+        setBadge('connected', 'connected');
+      }
+
+      function findSlashCommand(prefix) {
+        prefix = String(prefix || '').trim().split(/\s+/)[0].toLowerCase();
+        if (!prefix || prefix[0] !== '/') return null;
+        var matches = slashCommands.filter(function (c) { return c.name.indexOf(prefix) === 0; });
+        return matches.length === 1 ? matches[0] : null;
+      }
+
+      function slashFilterValue(value) {
+        var raw = String(value || '');
+        if (raw.charAt(0) !== '/') return null;
+        // 有参数后不再显示一级命令选择器，避免挡住正常输入。
+        if (/\s/.test(raw)) return null;
+        return raw.toLowerCase();
+      }
+
+      function getSlashMatches(value) {
+        var prefix = slashFilterValue(value);
+        if (prefix === null) return [];
+        return slashCommands.filter(function (c) { return c.name.indexOf(prefix) === 0; });
+      }
+
+      function hideSlashMenu() {
+        if (slashMenuEl) {
+          slashMenuEl.remove();
+          slashMenuEl = null;
+        }
+        slashSelectedIndex = 0;
+      }
+
+      function selectSlashCommand(cmd) {
+        if (!inputEl || !cmd) return;
+        // Always append a trailing space after explicit selection.  This both
+        // lets the user continue typing arguments and prevents the menu from
+        // immediately reopening for exact commands like "/status".
+        inputEl.value = cmd.name + ' ';
+        lineBuffer = inputEl.value;
+        hideSlashMenu();
+        inputEl.focus();
+      }
+
+      function refreshSlashSelectionClasses() {
+        if (!slashMenuEl) return;
+        slashMenuEl.querySelectorAll('.slash-option').forEach(function (item) {
+          item.classList.toggle('selected', Number(item.dataset.index) === slashSelectedIndex);
+        });
+      }
+
+      function updateSlashMenu() {
+        if (!inputRowEl || !inputEl || agentRunning) {
+          hideSlashMenu();
+          return;
+        }
+        var matches = getSlashMatches(inputEl.value);
+        if (!matches.length) {
+          if (slashFilterValue(inputEl.value) === null) hideSlashMenu();
+          else renderSlashMenu([]);
+          return;
+        }
+        if (slashSelectedIndex >= matches.length) slashSelectedIndex = matches.length - 1;
+        if (slashSelectedIndex < 0) slashSelectedIndex = 0;
+        renderSlashMenu(matches);
+      }
+
+      function renderSlashMenu(matches) {
+        if (!inputRowEl) return;
+        if (!slashMenuEl) {
+          slashMenuEl = document.createElement('div');
+          slashMenuEl.className = 'slash-menu';
+          inputRowEl.appendChild(slashMenuEl);
+        }
+        slashMenuEl.innerHTML = '';
+        if (!matches.length) {
+          var empty = document.createElement('div');
+          empty.className = 'slash-empty';
+          empty.textContent = 'No matching command. Type /help for all commands.';
+          slashMenuEl.appendChild(empty);
+          return;
+        }
+        matches.forEach(function (cmd, idx) {
+          var item = document.createElement('div');
+          item.className = 'slash-option' + (idx === slashSelectedIndex ? ' selected' : '');
+          item.dataset.index = String(idx);
+          var usage = document.createElement('div');
+          usage.className = 'slash-usage';
+          usage.textContent = cmd.usage || cmd.name;
+          var desc = document.createElement('div');
+          desc.className = 'slash-desc';
+          desc.textContent = cmd.description || '';
+          item.appendChild(usage);
+          item.appendChild(desc);
+          item.onmouseenter = function () {
+            slashSelectedIndex = idx;
+            refreshSlashSelectionClasses();
+          };
+          item.onmousedown = function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectSlashCommand(cmd);
+          };
+          item.onclick = function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectSlashCommand(cmd);
+          };
+          slashMenuEl.appendChild(item);
+        });
+        scrollBottom();
+      }
+
+      function currentSlashSelection() {
+        var matches = getSlashMatches(inputEl ? inputEl.value : '');
+        if (!matches.length) return null;
+        return matches[Math.max(0, Math.min(slashSelectedIndex, matches.length - 1))];
+      }
+
+      function finishAgentTurn() {
+        clearModelWaiting();
+        resetThinkingBlock();
+        stopAgentWatchdog();
+        agentRunning = false;
+        createInputRow();
+      }
+
+      function removeInputRow() {
+        hideSlashMenu();
+        if (inputRowEl) { inputRowEl.remove(); inputRowEl = null; inputEl = null; }
+        termOutput.focus();
+      }
+
+      // 把新内容追加到 input row 之前（保证 input row 始终在最底部）
+      function appendBeforeInput(child) {
+        if (inputRowEl && inputRowEl.parentNode === termOutput) {
+          termOutput.insertBefore(child, inputRowEl);
+        } else {
+          termOutput.appendChild(child);
+        }
+      }
+
+      function appendUserInput(text) {
+        appendLine('<span class="prompt">agent&gt;</span> ' + escapeHtml(text));
+      }
+
+      // ── 流式 markdown ──
+      function startMdBlock() {
+        clearModelWaiting();
+        if (currentMdEl) finalizeMdBlock();
+        var div = document.createElement('div');
+        div.className = 'md-block';
+        div.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
+        appendBeforeInput(div);
+        currentMdEl = div;
+        currentTextBuffer = '';
+        scrollBottom();
+      }
+
+      function appendTextDelta(text) {
+        if (!currentMdEl) startMdBlock();
+        currentTextBuffer += text;
+        currentMdEl.innerHTML = renderMarkdown(currentTextBuffer);
+        highlightCodeBlocks(currentMdEl);
+        scrollBottom();
+      }
+
+      function finalizeMdBlock() {
+        if (currentMdEl && currentTextBuffer) {
+          currentMdEl.innerHTML = renderMarkdown(currentTextBuffer);
+          highlightCodeBlocks(currentMdEl);
+        } else if (currentMdEl) {
+          // 没有收到任何文本 delta 时（例如 Ctrl+C 取消刚启动的请求），
+          // startMdBlock() 放进去的三个加载点必须清掉，否则会一直停在界面上。
+          currentMdEl.remove();
+        }
+        currentMdEl = null;
+        currentTextBuffer = '';
+      }
+
+      // ── 工具行 ──
+      var toolCards = {};
+
+      function isTodoWrite(toolName) {
+        return String(toolName || '').toLowerCase() === 'todowrite';
+      }
+
+      function isBashTool(toolName) {
+        var name = String(toolName || '').toLowerCase();
+        return name === 'bash' || name === 'bash_output' || name === 'kill_shell';
+      }
+
+      function ensureBashOutput(card) {
+        var output = card.querySelector('.bash-output');
+        if (output) return output;
+        output = document.createElement('div');
+        output.className = 'bash-output';
+        card.appendChild(output);
+        return output;
+      }
+
+      function renderBashSection(parent, label, text, cls) {
+        if (!text) return;
+        var section = document.createElement('div');
+        section.className = 'bash-section';
+        var labelEl = document.createElement('div');
+        labelEl.className = 'bash-label';
+        labelEl.textContent = label;
+        var body = document.createElement('div');
+        body.className = cls;
+        body.textContent = text;
+        section.appendChild(labelEl);
+        section.appendChild(body);
+        parent.appendChild(section);
+      }
+
+      function renderBashResult(card, metadata, fallbackText) {
+        card.querySelectorAll('.bash-summary,.bash-output').forEach(function (el) { el.remove(); });
+        var summary = document.createElement('div');
+        summary.className = 'bash-summary';
+        var bits = [];
+        if (metadata && metadata.exitCode !== undefined && metadata.exitCode !== null) bits.push('exit ' + metadata.exitCode);
+        if (metadata && metadata.elapsedMs !== undefined) bits.push((metadata.elapsedMs / 1000).toFixed(1) + 's');
+        if (metadata && metadata.totalBytes) bits.push(metadata.totalBytes + ' bytes');
+        if (metadata && metadata.backgroundTaskId) bits.push('background: ' + metadata.backgroundTaskId);
+        if (metadata && metadata.outputFilePath) bits.push('full output: ' + metadata.outputFilePath);
+        summary.textContent = bits.length ? bits.join(' · ') : (fallbackText ? 'completed' : 'no output');
+        card.appendChild(summary);
+
+        var output = ensureBashOutput(card);
+        output.innerHTML = '';
+        var stdout = metadata && metadata.stdout;
+        var stderr = metadata && metadata.stderr;
+        if (stdout || stderr) {
+          renderBashSection(output, 'stdout', stdout || '', 'bash-stdout');
+          renderBashSection(output, 'stderr', stderr || '', 'bash-stderr');
+        } else if (fallbackText) {
+          renderBashSection(output, 'result', fallbackText, 'bash-stdout');
+        }
+      }
+
+      function updateBashProgress(card, msg) {
+        if (!card) return;
+        var lineEl = card.querySelector('.term-line');
+        var elapsed = msg.elapsedTimeSeconds !== undefined ? ' — ' + msg.elapsedTimeSeconds + 's' : '';
+        if (msg.kind === 'bash_backgrounded') {
+          lineEl.textContent = '↳ bash running in background — ' + (msg.backgroundTaskId || '?');
+        } else {
+          lineEl.textContent = '▸ bash running' + elapsed + (msg.totalLines ? ' · ' + msg.totalLines + ' lines' : '');
+        }
+        var progress = card.querySelector('.bash-progress');
+        if (!progress) {
+          progress = document.createElement('div');
+          progress.className = 'bash-progress';
+          card.appendChild(progress);
+        }
+        var stream = msg.stream ? msg.stream + ': ' : '';
+        progress.textContent = stream + (msg.output || '').slice(-500);
+      }
+
+      function formatToolValue(v) {
+        if (Array.isArray(v) || (v && typeof v === 'object')) {
+          try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); }
+        }
+        return String(v);
+      }
+
+      function todoIcon(status) {
+        if (status === 'completed') return '✓';
+        if (status === 'in_progress') return '▸';
+        return '·';
+      }
+
+      function todoSummary(todos) {
+        var total = todos.length;
+        var done = todos.filter(function (t) { return t.status === 'completed'; }).length;
+        var active = todos.filter(function (t) { return t.status === 'in_progress'; }).length;
+        var pending = todos.filter(function (t) { return t.status === 'pending'; }).length;
+        return total + ' tasks — ' + done + ' done, ' + active + ' active, ' + pending + ' pending';
+      }
+
+      function renderTodoList(todos) {
+        var list = document.createElement('div');
+        list.className = 'todo-list';
+        (todos || []).forEach(function (t) {
+          var item = document.createElement('div');
+          var status = t.status || 'pending';
+          item.className = 'todo-item todo-' + status;
+
+          var icon = document.createElement('span');
+          icon.className = 'todo-icon';
+          icon.textContent = todoIcon(status);
+
+          var body = document.createElement('span');
+          var content = document.createElement('span');
+          content.className = 'todo-content';
+          content.textContent = t.content || '';
+          body.appendChild(content);
+
+          if (status === 'in_progress' && t.activeForm) {
+            var active = document.createElement('span');
+            active.className = 'todo-active';
+            active.textContent = '(' + t.activeForm + ')';
+            body.appendChild(active);
+          }
+
+          item.appendChild(icon);
+          item.appendChild(body);
+          list.appendChild(item);
+        });
+        return list;
+      }
+
+      function setToolCardState(card, toolName, isErr, resultText, metadata) {
+        var lineEl = card.querySelector('.term-line');
+        lineEl.className = 'term-line ' + (isErr ? 'tool-err' : 'tool-ok');
+        var brief = '';
+        if (isErr && resultText) {
+          brief = resultText.split('\n')[0];
+          if (brief.length > 120) brief = brief.slice(0, 120) + '...';
+        }
+        lineEl.textContent = (isErr ? '✗ ' : '✓ ') + toolName + (brief ? ' — ' + brief : '');
+
+        if (isTodoWrite(toolName)) {
+          var todos = metadata && (metadata.newTodos || metadata.storedTodos);
+          var oldTodos = metadata && metadata.oldTodos;
+          var detailEl = card.querySelector('.tool-detail');
+          if (detailEl) detailEl.textContent = '';
+          card.querySelectorAll('.todo-summary,.todo-list').forEach(function (el) { el.remove(); });
+
+          if (Array.isArray(todos)) {
+            var summary = document.createElement('div');
+            summary.className = 'todo-summary';
+            summary.textContent = 'Current Tasks: ' + todoSummary(todos);
+            card.appendChild(summary);
+            card.appendChild(renderTodoList(todos));
+          }
+          if (Array.isArray(oldTodos) && detailEl) {
+            detailEl.textContent = 'oldTodos: ' + JSON.stringify(oldTodos, null, 2);
+          }
+          if (resultText && detailEl) {
+            detailEl.textContent += (detailEl.textContent ? '\n' : '') + '→ ' + (resultText.length > 500 ? resultText.slice(0, 500) + '...' : resultText);
+          }
+          return;
+        }
+
+        if (isBashTool(toolName)) {
+          renderBashResult(card, metadata || {}, resultText || '');
+        }
+
+        var detail = card.querySelector('.tool-detail');
+        if (resultText && detail) {
+          detail.textContent += (detail.textContent ? '\n' : '') + '→ ' + (resultText.length > 500 ? resultText.slice(0, 500) + '...' : resultText);
+        }
+      }
+
+      function addToolLine(toolName, toolInput, status, result) {
+        var wrap = document.createElement('div');
+        wrap.className = 'tool-line-wrap';
+
+        var icon = status === 'ok' ? '✓' : status === 'error' ? '✗' : status === 'denied' ? '✗' : '▸';
+        var lineCls = status === 'ok' ? 'tool-ok' : status === 'error' ? 'tool-err' : status === 'denied' ? 'tool-denied' : 'tool-line';
+        var statusText = status === 'running' ? '' : status === 'ok' ? '' : status === 'error' ? ' (error)' : status === 'denied' ? ' (denied)' : '';
+
+        var line = document.createElement('div');
+        line.className = 'term-line ' + lineCls;
+        line.textContent = icon + ' ' + toolName + statusText;
+
+        var detail = document.createElement('div');
+        detail.className = 'tool-detail';
+        var parts = [];
+        if (toolInput && !isTodoWrite(toolName)) {
+          Object.keys(toolInput).forEach(function (k) {
+            var v = formatToolValue(toolInput[k]);
+            if (v.length > 120) v = v.slice(0, 120) + '...';
+            parts.push(k + ': ' + v);
+          });
+        }
+        if (parts.length) detail.textContent = parts.join('\n');
+        if (result) detail.textContent += (detail.textContent ? '\n' : '') + '→ ' + (result.length > 500 ? result.slice(0, 500) + '...' : result);
+
+        wrap.appendChild(line);
+        wrap.appendChild(detail);
+
+        if (isTodoWrite(toolName) && toolInput && Array.isArray(toolInput.todos)) {
+          var summary = document.createElement('div');
+          summary.className = 'todo-summary';
+          summary.textContent = status === 'running'
+            ? 'Updating tasks: ' + todoSummary(toolInput.todos)
+            : 'Current Tasks: ' + todoSummary(toolInput.todos);
+          wrap.appendChild(summary);
+          wrap.appendChild(renderTodoList(toolInput.todos));
+        }
+
+        wrap.onclick = function () { wrap.classList.toggle('open'); };
+
+        appendBeforeInput(wrap);
+        scrollBottom();
+        return wrap;
+      }
+
+      function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      // ── 权限栏 ──
+      function permissionKey(toolName, toolInput, metadata) {
+        metadata = metadata || {};
+        return [metadata.tool_use_id || metadata.request_id || '', toolName || '', JSON.stringify(toolInput || {})].join('|');
+      }
+
+      function flushPendingPermissionResponse() {
+        if (!pendingPermissionResponse || !isWsOpen()) return false;
+        ws.send(JSON.stringify(pendingPermissionResponse));
+        pendingPermissionResponse = null;
+        return true;
+      }
+
+      function sendPermissionResponse(decision, option) {
+        var payload = { type: 'permission_response', decision: decision, option: option };
+        if (isWsOpen()) {
+          ws.send(JSON.stringify(payload));
+          pendingPermissionResponse = null;
+          showPermResult(decision, option);
+          return;
+        }
+        pendingPermissionResponse = payload;
+        permBtns.style.display = 'none';
+        permResult.style.display = 'block';
+        permResult.className = 'perm-result';
+        permResult.textContent = 'WebSocket disconnected — decision queued and will be sent after reconnect';
+        scheduleReconnect(currentSessionId);
+      }
+
+      function showPermBar(toolName, toolInput, options, reason, metadata) {
+        metadata = metadata || {};
+        currentPermissionKey = permissionKey(toolName, toolInput, metadata);
+        permissionAwaiting = true;
+        currentPermissionOptions = Array.isArray(options) && options.length ? options : [
+          { type: 'accept-once', value: 'yes', label: 'Yes' },
+          { type: 'reject', value: 'no', label: 'No' }
+        ];
+        var isPlanApproval = metadata.kind === 'plan_approval' || toolName === 'ExitPlanMode';
+        permPrompt.textContent = isPlanApproval ? '? Approve plan?' : '? ' + toolName + ' requires permission';
+        var parts = [];
+        if (reason) parts.push('reason=' + reason);
+        if (!isPlanApproval) {
+          Object.keys(toolInput || {}).forEach(function (k) {
+            var v = String(toolInput[k]);
+            if (v.length > 60) v = v.slice(0, 60) + '...';
+            parts.push(k + '=' + v);
+          });
+          permDetail.textContent = parts.join('  ');
+        } else {
+          var planText = metadata.plan || (toolInput && toolInput.plan) || 'No plan content found. The agent should write the plan file before exiting Plan Mode.';
+          var pathText = metadata.planFilePath ? '<div class="perm-plan-path">' + escapeHtml(metadata.planFilePath) + '</div>' : '';
+          permDetail.innerHTML = (parts.length ? escapeHtml(parts.join('  ')) : 'Review the plan below before allowing implementation.') + pathText + '<div class="perm-plan">' + escapeHtml(planText) + '</div>';
+        }
+        permBtns.innerHTML = '';
+        currentPermissionOptions.forEach(function (opt) {
+          var btn = document.createElement('button');
+          var isReject = opt.type === 'reject' || opt.value === 'no';
+          btn.className = 'perm-btn ' + (isReject ? 'perm-btn-no' : 'perm-btn-yes');
+          btn.textContent = opt.label || (isReject ? 'No' : 'Yes');
+          btn.onclick = function () {
+            var decision = isReject ? 'deny' : 'allow';
+            sendPermissionResponse(decision, opt);
+          };
+          permBtns.appendChild(btn);
+        });
+        permBtns.style.display = 'flex';
+        permResult.style.display = 'none';
+        permBar.classList.add('show');
+      }
+      function hidePermBar() { permBar.classList.remove('show'); }
+      function showPermResult(decision, option) {
+        if (!permissionAwaiting && !permBar.classList.contains('show')) return;
+        permissionAwaiting = false;
+        currentPermissionKey = '';
+        permBtns.style.display = 'none';
+        permResult.style.display = 'block';
+        permResult.className = 'perm-result ' + (decision === 'allow' ? 'allowed' : 'denied');
+        var suffix = option && option.type === 'accept-session' ? ' for session' : '';
+        if (option && option.clearContext === true) suffix = ' · clear context';
+        if (option && option.clearContext === false) suffix = ' · keep context';
+        permResult.textContent = decision === 'allow' ? ('✓ Allowed' + suffix) : '✗ Denied';
+        setTimeout(hidePermBar, 800);
+      }
+      permYes.onclick = function () {
+        sendPermissionResponse('allow');
+      };
+      permNo.onclick = function () {
+        sendPermissionResponse('deny');
+      };
+
+      // ── API ──
+      function api(method, path, body) {
+        var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+        if (body) opts.body = JSON.stringify(body);
+        return fetch(API + path, opts).then(function (r) {
+          if (r.status === 401) {
+            location.href = '/terminal/login';
+            throw { detail: 'Terminal authentication required' };
+          }
+          if (!r.ok) return r.json().then(function (e) { throw e; });
+          return r.json();
+        });
+      }
+
+      function setFeishuMessage(text, isError) {
+        feishuMessage.textContent = text || '';
+        feishuMessage.style.color = isError ? 'var(--red)' : 'var(--muted)';
+      }
+
+      function renderFeishuStatus(status) {
+        feishuStatus = status || { connected: false };
+        var connected = !!feishuStatus.connected;
+        btnFeishu.classList.toggle('connected', connected);
+        feishuStatusCard.classList.toggle('connected', connected);
+        feishuMenuState.textContent = connected ? '已连' : '未连';
+        var credentialType = feishuStatus.credential_type || 'none';
+        feishuStatusText.textContent = connected ? ('Connected · ' + credentialType) : 'Disconnected';
+        feishuUserText.textContent = (feishuStatus.user_id || '-') + ' / ' + (feishuStatus.org_id || '-');
+        feishuExpiresText.textContent = feishuStatus.expires_at_iso || '未设置';
+        renderFeishuBridgeStatus(feishuStatus.bridge || null);
+        if (Array.isArray(feishuStatus.scopes) && feishuStatus.scopes.length) {
+          feishuScopes.placeholder = feishuStatus.scopes.join(', ');
+        }
+      }
+
+      function renderFeishuBridgeStatus(bridge) {
+        bridge = bridge || { state: 'stopped', running: false };
+        var state = bridge.state || (bridge.running ? 'running' : 'stopped');
+        var suffix = '';
+        if (bridge.reply_count || bridge.message_count) suffix = ' · ' + (bridge.reply_count || 0) + '/' + (bridge.message_count || 0);
+        if (bridge.last_ignored_reason) suffix += ' · ignored:' + bridge.last_ignored_reason;
+        if (bridge.last_error) suffix += ' · error:' + String(bridge.last_error).slice(0, 80);
+        feishuBridgeText.textContent = state + suffix;
+      }
+
+      function renderFeishuBridgeLogs(logs) {
+        logs = Array.isArray(logs) ? logs : [];
+        if (!logs.length) {
+          feishuBridgeLogs.textContent = '暂无日志';
+          return;
+        }
+        feishuBridgeLogs.textContent = logs.map(function (item) {
+          var time = item.ts_iso ? item.ts_iso.replace('T', ' ').replace('+00:00', 'Z') : '';
+          var copy = Object.assign({}, item);
+          delete copy.ts;
+          delete copy.ts_iso;
+          delete copy.level;
+          delete copy.event;
+          var details = JSON.stringify(copy);
+          return '[' + time + '] ' + (item.level || 'info') + ' ' + (item.event || '-') + (details === '{}' ? '' : ' ' + details);
+        }).join('\n');
+        feishuBridgeLogs.scrollTop = feishuBridgeLogs.scrollHeight;
+      }
+
+      function loadFeishuStatus() {
+        return api('GET', '/integrations/feishu').then(function (status) {
+          renderFeishuStatus(status);
+          return status;
+        }).catch(function (err) {
+          renderFeishuStatus({ connected: false });
+          setFeishuMessage((err && err.detail) || '飞书状态加载失败', true);
+        });
+      }
+
+      function openFeishuModal() {
+        feishuModal.classList.add('show');
+        feishuModal.setAttribute('aria-hidden', 'false');
+        setFeishuMessage('', false);
+        loadFeishuStatus().then(loadFeishuBridgeLogs);
+        setTimeout(function () { feishuAccessToken.focus(); }, 60);
+      }
+
+      function closeFeishuModal() {
+        feishuModal.classList.remove('show');
+        feishuModal.setAttribute('aria-hidden', 'true');
+      }
+
+      function buildFeishuTokenPayload() {
+        var accessToken = feishuAccessToken.value.trim();
+        if (!accessToken) {
+          setFeishuMessage('请先填写 Access Token', true);
+          return null;
+        }
+        var expiresInRaw = feishuExpiresIn.value.trim();
+        var scopes = feishuScopes.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+        var payload = {
+          access_token: accessToken,
+          refresh_token: feishuRefreshToken.value.trim(),
+          scopes: scopes,
+          metadata: { source: 'terminal-ui' },
+        };
+        if (expiresInRaw) payload.expires_in = Number(expiresInRaw);
+        return payload;
+      }
+
+      function saveFeishuToken() {
+        var appCredential = feishuAppCredential.value.trim();
+        if (appCredential) return saveFeishuAppCredentials(appCredential);
+        var payload = buildFeishuTokenPayload();
+        if (!payload) return Promise.resolve(null);
+        setFeishuMessage('保存中…', false);
+        return api('PUT', '/integrations/feishu/token', payload).then(function (result) {
+          feishuAccessToken.value = '';
+          feishuRefreshToken.value = '';
+          feishuExpiresIn.value = '';
+          setFeishuMessage('已绑定到当前用户', false);
+          renderFeishuStatus(result.feishu || { connected: true });
+          return loadFeishuStatus();
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '保存失败', true);
+        });
+      }
+
+      function saveFeishuAppCredentials(appCredential) {
+        setFeishuMessage('保存 App 凭证中…', false);
+        return api('PUT', '/integrations/feishu/app-credentials', {
+          credential: appCredential,
+          metadata: { source: 'terminal-ui' },
+        }).then(function (result) {
+          feishuAppCredential.value = '';
+          setFeishuMessage('已保存 App 凭证', false);
+          renderFeishuStatus(result.feishu || { connected: true, credential_type: 'app_credentials' });
+          return loadFeishuStatus();
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || 'App 凭证保存失败', true);
+          throw err;
+        });
+      }
+
+      function summarizeFeishuTest(result) {
+        if (!result || !result.result || !result.result.data) return result && result.message ? result.message : '连接测试完成';
+        var data = result.result.data;
+        var name = data.name || data.en_name || data.nick_name || data.open_id || '';
+        return name ? (result.message + '：' + name) : result.message;
+      }
+
+      function testFeishuConnection() {
+        var hasNewCredential = feishuAppCredential.value.trim() || feishuAccessToken.value.trim();
+        setFeishuMessage(hasNewCredential ? '保存并测试中…' : '测试连接中…', false);
+        var beforeTest = hasNewCredential ? saveFeishuToken() : Promise.resolve(null);
+        return beforeTest.then(function () {
+          return api('POST', '/integrations/feishu/test');
+        }).then(function (result) {
+          setFeishuMessage(summarizeFeishuTest(result), !result.ok);
+          return loadFeishuStatus();
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '连接测试失败', true);
+        });
+      }
+
+      function loadFeishuBridgeStatus() {
+        return api('GET', '/integrations/feishu/bridge').then(function (bridge) {
+          renderFeishuBridgeStatus(bridge);
+          return bridge;
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '消息桥状态加载失败', true);
+        });
+      }
+
+      function loadFeishuBridgeLogs() {
+        return api('GET', '/integrations/feishu/bridge/logs?limit=120').then(function (result) {
+          renderFeishuBridgeLogs(result.logs || []);
+          return result;
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '诊断日志加载失败', true);
+        });
+      }
+
+      function startFeishuBridge() {
+        var hasNewCredential = feishuAppCredential.value.trim();
+        setFeishuMessage(hasNewCredential ? '保存 App 凭证并启动消息桥…' : '启动飞书消息桥…', false);
+        var beforeStart = hasNewCredential ? saveFeishuAppCredentials(hasNewCredential) : Promise.resolve(null);
+        return beforeStart.then(function () {
+          return api('POST', '/integrations/feishu/bridge/start');
+        }).then(function (result) {
+          renderFeishuBridgeStatus(result.bridge);
+          setFeishuMessage('消息桥已启动：现在可以在飞书里给机器人发消息', false);
+          return loadFeishuStatus().then(loadFeishuBridgeLogs);
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '消息桥启动失败', true);
+        });
+      }
+
+      function stopFeishuBridge() {
+        setFeishuMessage('停止飞书消息桥…', false);
+        return api('POST', '/integrations/feishu/bridge/stop').then(function (result) {
+          renderFeishuBridgeStatus(result.bridge);
+          setFeishuMessage('消息桥已停止', false);
+          return loadFeishuStatus().then(loadFeishuBridgeLogs);
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '消息桥停止失败', true);
+        });
+      }
+
+      function disconnectFeishu() {
+        if (!confirm('解除当前用户的飞书绑定？')) return;
+        setFeishuMessage('解除绑定中…', false);
+        api('DELETE', '/integrations/feishu').then(function () {
+          setFeishuMessage('已解除绑定', false);
+          renderFeishuStatus({ connected: false });
+        }).catch(function (err) {
+          setFeishuMessage((err && err.detail) || '解除绑定失败', true);
+        });
+      }
+
+      // ── Session ──
+      function loadSessions() {
+        api('GET', '/sessions?limit=100').then(function (sessions) {
+          sessionList.innerHTML = '';
+          sessions.forEach(function (s) {
+            var div = document.createElement('div');
+            div.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+            div.dataset.id = s.id;
+            var info = document.createElement('div');
+            info.className = 'session-info';
+            var title = document.createElement('div');
+            title.className = 'session-title';
+            title.textContent = s.metadata && s.metadata.title ? s.metadata.title : s.id.slice(0, 16);
+            var meta = document.createElement('div');
+            meta.className = 'session-meta';
+            var selectedModel = s.metadata && s.metadata.model_id ? ' · ' + s.metadata.model_id : '';
+            meta.textContent = (s.updated_at ? s.updated_at.slice(0, 19).replace('T', ' ') : '') + selectedModel;
+            var usage = document.createElement('div');
+            usage.className = 'session-usage';
+            usage.textContent = formatBillingSummary(s.billing);
+            info.appendChild(title);
+            info.appendChild(meta);
+            info.appendChild(usage);
+            var del = document.createElement('button');
+            del.className = 'session-delete';
+            del.textContent = '\u00D7';
+            del.onclick = function (e) {
+              e.stopPropagation();
+              if (!confirm('Delete this session?')) return;
+              api('DELETE', '/sessions/' + encodeURIComponent(s.id)).then(function () {
+                if (currentSessionId === s.id) closeSession();
+                loadSessions();
+              });
+            };
+            div.appendChild(info);
+            div.appendChild(del);
+            div.onclick = function () { openSession(s.id); };
+            sessionList.appendChild(div);
+          });
+        });
+      }
+
+      function openSession(sessionId) {
+        if (currentSessionId === sessionId && ws && ws.readyState === WebSocket.OPEN) return;
+        closeSession();
+        currentSessionId = sessionId;
+        intentionalClose = false;
+        document.querySelectorAll('.session-item').forEach(function (el) {
+          el.classList.toggle('active', el.dataset.id === sessionId);
+        });
+        badge.style.display = 'flex';
+        loadTasks();
+        connectWS(sessionId, { replay: true });
+      }
+
+      function closeSession() {
+        intentionalClose = true;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        if (ws) { ws.close(); ws = null; }
+        currentSessionId = null;
+        agentRunning = false;
+        stopAgentWatchdog();
+        clearModelWaiting();
+        termOutput.innerHTML = '';
+        setTaskState([], '');
+        inputRowEl = null; inputEl = null; lineBuffer = '';
+      }
+
+      btnNew.onclick = function () {
+        api('POST', '/sessions', { metadata: { title: 'New Session' } }).then(function (s) {
+          loadSessions();
+          openSession(s.id);
+        });
+      };
+
+      btnLogout.onclick = function () {
+        if (ws) ws.close();
+        fetch('/terminal/logout', { method: 'POST' }).finally(function () { location.href = '/terminal/login'; });
+      };
+
+      btnFeishu.onclick = openFeishuModal;
+      feishuClose.onclick = closeFeishuModal;
+      feishuRefresh.onclick = function () { setFeishuMessage('刷新中…', false); loadFeishuStatus().then(loadFeishuBridgeLogs).then(function () { setFeishuMessage('状态已刷新', false); }); };
+      feishuLogsRefresh.onclick = function () { setFeishuMessage('刷新诊断日志…', false); loadFeishuBridgeStatus().then(loadFeishuBridgeLogs).then(function () { setFeishuMessage('诊断日志已刷新', false); }); };
+      feishuSave.onclick = saveFeishuToken;
+      feishuTest.onclick = testFeishuConnection;
+      feishuBridgeStart.onclick = startFeishuBridge;
+      feishuBridgeStop.onclick = stopFeishuBridge;
+      feishuDisconnect.onclick = disconnectFeishu;
+      feishuModal.addEventListener('click', function (e) { if (e.target === feishuModal) closeFeishuModal(); });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && feishuModal.classList.contains('show')) closeFeishuModal();
+      });
+
+      // ── 终端键盘输入 ──
+      // 点击终端区域自动聚焦
+      termOutput.addEventListener('click', function () { if (inputEl) inputEl.focus(); });
+
+      termOutput.addEventListener('keydown', function (e) {
+        // Ctrl+C：运行中立即取消；未运行时撤销当前输入行
+        if (e.ctrlKey && e.key === 'c') {
+          e.preventDefault();
+          if (agentRunning) {
+            abortRunningTurn();
+          } else if (inputEl) {
+            cancelCurrentInputLine();
+          }
+          return;
+        }
+
+        if (!inputEl) return;
+
+        // agent 运行中只放行 Ctrl+C
+        if (agentRunning) return;
+
+        if (slashMenuEl) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            var downMatches = getSlashMatches(inputEl.value);
+            if (downMatches.length) slashSelectedIndex = (slashSelectedIndex + 1) % downMatches.length;
+            updateSlashMenu();
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            var upMatches = getSlashMatches(inputEl.value);
+            if (upMatches.length) slashSelectedIndex = (slashSelectedIndex - 1 + upMatches.length) % upMatches.length;
+            updateSlashMenu();
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            hideSlashMenu();
+            return;
+          }
+        }
+
+        // 上下键：没有 slash 菜单时浏览历史输入
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          navigateCommandHistory(-1);
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          navigateCommandHistory(1);
+          return;
+        }
+
+        // Tab 补全 slash command
+        if (e.key === 'Tab' && inputEl.value.trim().charAt(0) === '/') {
+          e.preventDefault();
+          selectSlashCommand(currentSlashSelection() || findSlashCommand(inputEl.value));
+          return;
+        }
+
+        // Enter 提交
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          var text = inputEl.value.trim();
+          if (!text) return;
+          if (slashMenuEl) {
+            var exact = slashCommands.some(function (c) { return c.name === text; });
+            if (!exact || text === '/') {
+              selectSlashCommand(currentSlashSelection());
+              return;
+            }
+          }
+          removeInputRow();
+          appendUserInput(text);
+          addCommandHistory(text);
+          historyIndex = null;
+          historyDraft = '';
+          if (!isWsOpen()) {
+            appendLine('[websocket disconnected — reconnecting, please submit again after connected]', 'err-line');
+            createInputRow();
+            if (inputEl) {
+              inputEl.value = text;
+              lineBuffer = text;
+            }
+            if (currentSessionId) scheduleReconnect(currentSessionId);
+            return;
+          }
+          ws.send(text);
+          lineBuffer = '';
+          if (text.charAt(0) === '/') {
+            createInputRow();
+            return;
+          }
+          abortRequested = false;
+          agentRunning = true;
+          startAgentWatchdog();
+          startMdBlock();
+          return;
+        }
+
+        // Ctrl+U 清行
+        if (e.ctrlKey && e.key === 'u') {
+          e.preventDefault();
+          inputEl.value = '';
+          lineBuffer = '';
+          return;
+        }
+      });
+
+      // input 事件：实时同步内容
+      termOutput.addEventListener('input', function (e) {
+        if (!inputEl) return;
+        lineBuffer = inputEl.value;
+        historyIndex = null;
+        historyDraft = '';
+        slashSelectedIndex = 0;
+        updateSlashMenu();
+      });
+
+      // ── WebSocket ──
+      function resetTerminalForReplay() {
+        termOutput.innerHTML = '';
+        inputRowEl = null;
+        inputEl = null;
+        lineBuffer = '';
+        currentMdEl = null;
+        currentTextBuffer = '';
+        resetThinkingBlock();
+        toolCards = {};
+        hideSlashMenu();
+      }
+
+      function scheduleReconnect(sessionId) {
+        if (!sessionId || intentionalClose) return;
+        if (reconnectTimer) return;
+        var delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 10000);
+        reconnectAttempt += 1;
+        setBadge('closed', 'reconnecting in ' + Math.ceil(delay / 1000) + 's');
+        reconnectTimer = setTimeout(function () {
+          reconnectTimer = null;
+          if (!currentSessionId || currentSessionId !== sessionId || intentionalClose) return;
+          connectWS(sessionId, { replay: true, reconnect: true });
+        }, delay);
+      }
+
+      function isWsOpen() {
+        return ws && ws.readyState === WebSocket.OPEN;
+      }
+
+      function connectWS(sessionId, opts) {
+        opts = opts || {};
+        if (opts.replay) resetTerminalForReplay();
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          intentionalClose = true;
+          ws.close();
+        }
+        intentionalClose = false;
+        setBadge('connecting', opts.reconnect ? 'reconnecting' : 'connecting');
+        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var wsUrl = proto + '//' + location.host + '/terminal/ws?session_id=' + encodeURIComponent(sessionId);
+        var socket = new WebSocket(wsUrl);
+        ws = socket;
+
+        socket.onopen = function () {
+          if (ws !== socket) return;
+          reconnectAttempt = 0;
+          setBadge('connected', 'connected');
+          appendLine('<span style="color:#eab308">MyAgent terminal ' + (opts.reconnect ? 'reconnected' : 'connected') + '</span>');
+          createInputRow();
+          if (flushPendingPermissionResponse()) {
+            appendLine('[queued permission response sent after reconnect]', 'sys-line');
+          }
+        };
+
+        socket.onmessage = function (event) {
+          if (ws !== socket) return;
+          touchAgentEvent();
+          var data = event.data;
+          var msg = null;
+          try { msg = JSON.parse(data); } catch (e) {}
+
+          if (msg && typeof msg === 'object') {
+            try {
+              handleMsg(msg);
+            } catch (err) {
+              appendLine('frontend event error: ' + (err && err.message ? err.message : String(err)), 'err-line');
+              console.error('failed to handle websocket message', msg, err);
+            }
+          } else {
+            // 忽略非 JSON 残留
+            var clean = data.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r\n/g, '\n').trim();
+            if (clean) appendRaw(clean);
+          }
+        };
+
+        function handleMsg(msg) {
+          var type = msg.type;
+
+          if (type === 'slash_commands') {
+            if (Array.isArray(msg.commands)) slashCommands = msg.commands;
+            updateSlashMenu();
+            return;
+          }
+
+          if (type === 'companion_state') {
+            setCompanionState(msg.companion || null, msg.buddy_action || 'state');
+            return;
+          }
+
+          if (type === 'task_state') {
+            setTaskState(msg.tasks || [], msg.task_list_id || '');
+            return;
+          }
+
+          if (type === 'workspace_state') {
+            setWorkspaceState(msg || null);
+            return;
+          }
+
+          // ── 历史回放 ──
+          if (type === 'history_user') {
+            appendUserInput(msg.text || '');
+            addCommandHistory(msg.text || '');
+            if (inputRowEl) termOutput.appendChild(inputRowEl);
+          }
+          else if (type === 'history_assistant') {
+            var div = document.createElement('div');
+            div.className = 'md-block';
+            div.innerHTML = renderMarkdown(msg.text || '');
+            highlightCodeBlocks(div);
+            termOutput.appendChild(div);
+            if (inputRowEl) termOutput.appendChild(inputRowEl);
+          }
+          else if (type === 'history_compact_summary') {
+            appendLine('[conversation compacted — ' + (msg.pre_message_count || '?') + ' messages summarized]', 'sys-line');
+            if (inputRowEl) termOutput.appendChild(inputRowEl);
+          }
+          else if (type === 'history_thinking') {
+            resetThinkingBlock();
+            appendThinkingDelta(msg.text || '');
+            resetThinkingBlock();
+            if (inputRowEl) termOutput.appendChild(inputRowEl);
+          }
+          else if (type === 'history_tool_use') {
+            addToolLine(msg.tool || '?', msg.input, 'ok', null);
+            if (inputRowEl) termOutput.appendChild(inputRowEl);
+          }
+          else if (type === 'history_tool_result') {
+            // skip
+          }
+          // ── 实时事件 ──
+          else if (type === 'text_delta') {
+            appendTextDelta(msg.text || '');
+          }
+          else if (type === 'thinking_delta') {
+            appendThinkingDelta(msg.text || '');
+          }
+          else if (type === 'assistant_text') {
+            // 已通过 text_delta 流式输出
+          }
+          else if (type === 'model_started') {
+            resetThinkingBlock();
+            setModelWaiting(msg.turn);
+          }
+          else if (type === 'model_completed') {
+            clearModelWaiting();
+            resetThinkingBlock();
+            if (msg.billing) loadSessions();
+          }
+          else if (type === 'tool_started') {
+            clearModelWaiting();
+            finalizeMdBlock();
+            var card = addToolLine(msg.tool || '?', msg.input, 'running', null);
+            if (msg.tool_use_id) toolCards[msg.tool_use_id] = card;
+          }
+          else if (type === 'tool_progress') {
+            var progressCard = toolCards[msg.tool_use_id];
+            if (progressCard && isBashTool(msg.tool || 'bash')) updateBashProgress(progressCard, msg);
+          }
+          else if (type === 'tool_completed') {
+            var card = toolCards[msg.tool_use_id];
+            if (card) {
+              var isErr = msg.is_error;
+              var toolName = msg.tool || '?';
+              var resultText = msg.result || '';
+              setToolCardState(card, toolName, isErr, resultText, msg.metadata || {});
+              if (!isErr && isTodoWrite(toolName)) {
+                setModelWaiting('next');
+              }
+              delete toolCards[msg.tool_use_id];
+            }
+            scrollBottom();
+          }
+          else if (type === 'tool_denied') {
+            finalizeMdBlock();
+            addToolLine(msg.tool || '?', {}, 'denied', msg.reason || 'Denied');
+            if (msg.recoveryHint) appendLine('[recovery] ' + msg.recoveryHint, 'sys-line');
+          }
+          else if (type === 'tool_failure') {
+            appendLine('[tool failure] ' + (msg.tool || '?') + ' · ' + (msg.failureCategory || 'tool_failure'), 'err-line');
+          }
+          else if (type === 'recovery_suggested') {
+            appendLine('[recovery] ' + (msg.recoveryHint || msg.message || ''), msg.repeated ? 'err-line' : 'sys-line');
+          }
+          else if (type === 'api_retry') {
+            appendLine('[api retry] ' + (msg.category || 'api_error') + ' — retrying in ' + (msg.retry_delay_ms || 0) + 'ms (' + (msg.attempt || '?') + '/' + (msg.max_retries || '?') + ')', 'sys-line');
+          }
+          else if (type === 'model_error') {
+            appendLine('[model error] ' + (msg.category || 'unknown') + ': ' + (msg.error || ''), 'err-line');
+          }
+          else if (type === 'conversation_repaired') {
+            appendLine('[conversation repaired — fixed tool_use/tool_result pairing]', 'sys-line');
+          }
+          else if (type === 'permission_retry_available') {
+            appendLine('[permission retry available] ' + (msg.tool || '?'), 'sys-line');
+          }
+          else if (type === 'permission_request') {
+            var permMetadata = msg.metadata || {};
+            if (msg.tool_use_id && !permMetadata.tool_use_id) permMetadata.tool_use_id = msg.tool_use_id;
+            showPermBar(msg.tool, msg.input, msg.options || [], msg.reason || '', permMetadata);
+          }
+          else if (type === 'permission_result') {
+            showPermResult(msg.decision, msg.option);
+          }
+          else if (type === 'plan_implementation_started') {
+            appendLine('[plan approved — implementation started' + (msg.clearContext ? ', context cleared' : ', keeping context') + ']', 'sys-line');
+          }
+          else if (type === 'plan_state') {
+            if (msg.mode === 'plan') {
+              appendLine('[plan mode restored] plan file: ' + (msg.plan_file_path || msg.planFilePath || '?'), 'sys-line');
+            } else if (msg.plan_slug) {
+              appendLine('[plan state restored] plan file: ' + (msg.plan_file_path || msg.planFilePath || '?'), 'sys-line');
+            }
+          }
+          else if (type === 'agent_status') {
+            if (msg.running) {
+              abortRequested = false;
+              agentRunning = true;
+              removeInputRow();
+              startAgentWatchdog();
+              setBadge('connected', 'connected — running');
+            } else {
+              finishAgentTurn();
+            }
+          }
+          else if (type === 'command_result') {
+            if (msg.clear_terminal) resetTerminalForReplay();
+            appendCommandResult(msg.title, msg.content, false, msg);
+            if (msg.companion) setCompanionState(msg.companion, msg.buddy_action || 'state');
+            if (msg.model_changed) loadSessions();
+            if (!agentRunning && !inputRowEl) createInputRow();
+          }
+          else if (type === 'command_error') {
+            appendCommandResult(msg.title, msg.content, true, msg);
+            if (!agentRunning && !inputRowEl) createInputRow();
+          }
+          else if (type === 'context_compacting') {
+            appendLine('[compacting context — ' + (msg.message_count || '?') + ' messages...]', 'sys-line');
+          }
+          else if (type === 'context_compacted') {
+            appendLine('[context compacted — ' + (msg.message_count || '?') + ' messages remaining]', 'sys-line');
+          }
+          else if (type === 'context_compact_failed') {
+            appendLine('[context compact failed — continuing with existing context]', 'sys-line');
+          }
+          else if (type === 'hook_message') {
+            appendLine('[hook] ' + msg.message, 'hook-line');
+          }
+          else if (type === 'companion_reaction') {
+            if (msg.companion) setCompanionState(msg.companion, 'reaction');
+            showCompanionReaction(msg.text || '');
+          }
+          else if (type === 'loop_completed') {
+            abortRequested = false;
+            finalizeMdBlock();
+            finishAgentTurn();
+          }
+          else if (type === 'loop_failed') {
+            abortRequested = false;
+            if (currentTextBuffer) {
+              currentTextBuffer += '\n\n**Error:** ' + (msg.error || 'unknown');
+              finalizeMdBlock();
+            } else {
+              appendLine('error: ' + (msg.error || 'unknown'), 'err-line');
+            }
+            finishAgentTurn();
+          }
+          else if (type === 'loop_aborted') {
+            finalizeMdBlock();
+            if (!abortRequested) appendLine('[interrupted]', 'sys-line');
+            abortRequested = false;
+            finishAgentTurn();
+          }
+        }
+
+        socket.onclose = function () {
+          if (ws !== socket) return;
+          setBadge('closed', 'closed');
+          finalizeMdBlock();
+          stopAgentWatchdog();
+          clearModelWaiting();
+          agentRunning = false;
+          if (currentSessionId && !inputRowEl) createInputRow();
+          scheduleReconnect(sessionId);
+        };
+        socket.onerror = function () {
+          if (ws !== socket) return;
+          setBadge('error', 'error');
+        };
+      }
+
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible') return;
+        if (!currentSessionId) return;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+          connectWS(currentSessionId, { replay: true, reconnect: true });
+        }
+      });
+
+      // ── Init ──
+      loadFeishuStatus();
+      loadSessions();
+      setInterval(loadSessions, 5000);
+    })();
+    </script>
+  </body>
+</html>

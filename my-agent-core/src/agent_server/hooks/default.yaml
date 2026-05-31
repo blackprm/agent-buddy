@@ -1,0 +1,8 @@
+hooks:
+  PreToolUse: []
+  PostToolUse: []
+  UserPromptSubmit: []
+  SessionStart: []
+  Stop: []
+  PreCompact: []
+  PostCompact: []
