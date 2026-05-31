@@ -1,0 +1,9 @@
+[submodule "claude-code-sourcemap"]
+	path = claude-code-sourcemap
+	url = https://github.com/ChinaSiro/claude-code-sourcemap.git
+[submodule "learn-claude-code"]
+	path = learn-claude-code
+	url = https://github.com/shareAI-lab/learn-claude-code.git
+[submodule "openclaw"]
+	path = openclaw
+	url = https://github.com/openclaw/openclaw.git

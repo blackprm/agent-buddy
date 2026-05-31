@@ -28,7 +28,5 @@ node_modules/
 dist/
 build/
 
-# Large vendored/exploration directories kept local for now
+# Large generated/vendor directories kept local for now
 my-agent-core/vendor/
-claude-code-sourcemap/
-openclaw/
