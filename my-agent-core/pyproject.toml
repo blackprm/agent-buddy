@@ -7,7 +7,7 @@ dependencies = []
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.39.0"]
-web = ["fastapi>=0.115.0", "uvicorn>=0.30.0", "pyyaml>=6.0", "lark-oapi>=1.4.0"]
+web = ["fastapi>=0.115.0", "uvicorn>=0.30.0", "pyyaml>=6.0", "python-multipart>=0.0.9", "filetype>=1.2.0", "openai>=1.0.0", "httpx>=0.28.0", "tos>=2.6", "lark-oapi>=1.4.0", "volcengine-python-sdk>=5.0.31", "volcengine>=1.0.223", "aiohttp>=3.13.0", "pillow>=10.0.0"]
 search = [
     "certifi==2026.5.20",
     "babel==2.18.0",

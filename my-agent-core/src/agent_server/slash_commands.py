@@ -25,7 +25,8 @@ from agent_core.sandbox import get_sandbox_manager
 from agent_core.skills.store import SkillStore
 from agent_core.session.store import SessionStore
 from agent_core.users.store import UserStore
-from agent_server.prompt_store import clear_system_prompt_cache
+from agent_server.model_providers import available_provider_names, default_model_for_provider, detect_provider_from_env
+from agent_server.prompt_store import PromptStore, clear_system_prompt_cache
 
 
 CommandRunningChecker = Callable[[str], Awaitable[bool]]
@@ -43,6 +44,7 @@ def command_specs() -> list[dict[str, str]]:
         {"name": "/memory", "usage": "/memory [show|path|clear]", "description": "查看或清理当前 session memory"},
         {"name": "/skills", "usage": "/skills [reload|show <name>]", "description": "列出、刷新或查看本地 skills"},
         {"name": "/model", "usage": "/model [list|current|<model_id>|<provider> <model_id>]", "description": "查看或切换当前 session 使用的模型"},
+        {"name": "/prompt", "usage": "/prompt [list|current|<template>]", "description": "查看或切换当前 session 使用的 Prompt 模板"},
         {"name": "/permissions", "usage": "/permissions [mode|reset|allow-bash|revoke-bash|allow-skill|revoke-skill|allow-write|revoke-write|allow-web|revoke-web|allow-web-search|revoke-web-search]", "description": "查看/切换权限模式并管理当前 session 权限规则"},
         {"name": "/yolo", "usage": "/yolo", "description": "切换到 YOLO 权限模式（等价于 /permissions yolo）"},
         {"name": "/sandbox", "usage": "/sandbox [enable|disable|open|closed|auto-on|auto-off|exclude <pattern>|unexclude <pattern>]", "description": "查看或配置 Bash 沙箱"},
@@ -147,6 +149,9 @@ async def handle_slash_command(
     if command in ("/model", "/models"):
         return await _model_command(args, session_id=session_id, session_store=session_store, is_running=is_running)
 
+    if command in ("/prompt", "/prompts"):
+        return await _prompt_command(args, session_id=session_id, session_store=session_store, is_running=is_running)
+
     if command == "/yolo":
         args = ["yolo"]
 
@@ -171,6 +176,7 @@ async def handle_slash_command(
             f"model_provider: {selection['model_provider']}",
             f"model_id: {selection['model_id']}",
             f"env_default_provider: {provider}",
+            f"prompt_template: {_session_prompt_template(session_store, session_id)}",
             "system_prompt_context:",
             f"  claude_md_enabled: {str(not _env_truthy('CLAUDE_CODE_DISABLE_CLAUDE_MDS') and not _env_truthy('AGENT_DISABLE_CLAUDE_MDS')).lower()}",
             f"  git_status_enabled: {str(not _env_truthy('AGENT_DISABLE_GIT_STATUS')).lower()}",
@@ -192,6 +198,7 @@ async def handle_slash_command(
                 "model_provider": selection["model_provider"],
                 "model_id": selection["model_id"],
                 "env_default_provider": provider,
+                "prompt_template": _session_prompt_template(session_store, session_id),
                 "session_memory": memory_cfg,
                 "compact": compact_cfg,
                 "permissions": {"mode": get_session_permission_state(session_id).mode},
@@ -694,25 +701,57 @@ async def _model_command(
     )
 
 
+async def _prompt_command(
+    args: list[str],
+    *,
+    session_id: str,
+    session_store: SessionStore,
+    is_running: CommandRunningChecker,
+) -> dict[str, Any]:
+    store = PromptStore()
+    sub = args[0].strip() if args else "current"
+    current = _session_prompt_template(session_store, session_id)
+    templates = store.list_templates()
+
+    if sub.lower() in ("list", "ls"):
+        return _result("Prompt 模板列表", _format_prompt_template_list(templates, current=current), templates=templates, current_prompt_template=current)
+
+    if sub.lower() in ("current", "show", "status", ""):
+        return _result("当前 Prompt 模板", f"prompt_template: {current}\n\n使用 /prompt list 查看可选模板；使用 /prompt <template> 切换当前 session。", current_prompt_template=current)
+
+    if await is_running(session_id):
+        return _error("Prompt 切换失败", "agent 正在运行中；请先 Ctrl+C 或执行 /abort 后再切换 Prompt 模板")
+
+    template_name = sub
+    try:
+        store.get_template(template_name)
+    except FileNotFoundError:
+        return _error("Prompt 模板不存在", f"找不到 Prompt 模板：{template_name}\n\n可执行 /prompt list 查看可选模板。")
+
+    metadata = _merged_session_metadata(session_store, session_id, {"prompt_template": template_name})
+    info = session_store.get_session(session_id)
+    if info is None:
+        session_store.create_session(session_id=session_id, metadata=metadata)
+    else:
+        session_store.update_session_metadata(session_id, metadata)
+    clear_system_prompt_cache()
+    return _result(
+        "Prompt 已切换",
+        f"当前 session 后续对话将使用 Prompt 模板：{template_name}\n\n提示：只影响新一轮运行时构建；历史消息不会清空。",
+        prompt_changed=True,
+        current_prompt_template=template_name,
+    )
+
+
 def _parse_model_switch_args(args: list[str], *, billing_store: BillingStore, current: dict[str, str]) -> tuple[str, str]:
-    providers = {"anthropic", "openai", "ark", "volcengine", "doubao", "deepseek", "gateway", "fake", "fake_tool", "fake_thinking"}
+    providers = available_provider_names()
     first = args[0].strip()
     if len(args) >= 2 and first.lower() in providers:
         return first.lower(), args[1].strip()
     if len(args) == 1 and first.lower() in providers:
         provider = first.lower()
         # 只切 provider 时，沿用 runtime_factory 中的默认模型解析逻辑。
-        if provider == "anthropic":
-            return provider, os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL_ID") or "claude-3-5-sonnet-latest"
-        if provider == "openai":
-            return provider, os.getenv("OPENAI_MODEL") or os.getenv("MODEL_ID") or "gpt-4o"
-        if provider == "deepseek":
-            return provider, os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_ID") or "deepseek-chat"
-        if provider == "gateway":
-            return provider, os.getenv("GATEWAY_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-        if provider in {"ark", "volcengine", "doubao"}:
-            return provider, os.getenv("ARK_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-        return provider, provider
+        return provider, default_model_for_provider(provider)
 
     model_id = first
     model = billing_store.get_model(model_id)
@@ -756,20 +795,17 @@ def _session_model_selection(session_store: SessionStore, session_id: str) -> di
     return {"model_provider": provider, "model_id": model_id}
 
 
+def _session_prompt_template(session_store: SessionStore, session_id: str) -> str:
+    metadata: dict[str, Any] = {}
+    info = session_store.get_session(session_id)
+    if info and isinstance(info.get("metadata"), dict):
+        metadata = info["metadata"]
+    selected = str(metadata.get("prompt_template") or metadata.get("template_name") or "").strip()
+    return selected or (os.getenv("AGENT_PROMPT_TEMPLATE") or os.getenv("PROMPT_TEMPLATE") or "default").strip() or "default"
+
+
 def _default_model_id_for_provider(provider: str) -> str:
-    if provider == "anthropic":
-        return os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL_ID") or "claude-3-5-sonnet-latest"
-    if provider == "openai":
-        return os.getenv("OPENAI_MODEL") or os.getenv("MODEL_ID") or "gpt-4o"
-    if provider == "deepseek":
-        return os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_ID") or "deepseek-chat"
-    if provider == "gateway":
-        return os.getenv("GATEWAY_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-    if provider in {"ark", "volcengine", "doubao"}:
-        return os.getenv("ARK_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-    if provider in {"fake", "fake_tool", "fake_thinking"}:
-        return provider
-    return os.getenv("MODEL_ID") or provider or "unknown"
+    return default_model_for_provider(provider)
 
 
 def _format_current_model(selection: dict[str, str], model: dict[str, Any] | None) -> str:
@@ -794,6 +830,25 @@ def _format_current_model(selection: dict[str, str], model: dict[str, Any] | Non
             "计费价格：模型表中未找到该模型，账单费用会按 0 计算",
             "提示：执行 /model list 会自动把当前模型补齐进模型表；也可在 Admin → Models 中手动新增同名模型价格。",
         ])
+    return "\n".join(lines)
+
+
+def _format_prompt_template_list(templates: list[dict[str, Any]], *, current: str) -> str:
+    if not templates:
+        return "暂无 Prompt 模板。"
+    lines = []
+    for item in templates:
+        name = str(item.get("name") or "")
+        marker = "*" if name == current else " "
+        desc = str(item.get("description") or "").strip()
+        version = str(item.get("version") or "").strip()
+        suffix = ""
+        if version:
+            suffix += f" v{version}"
+        if desc:
+            suffix += f" — {desc}"
+        lines.append(f"{marker} {name}{suffix}")
+    lines.extend(["", "切换：/prompt <template>"])
     return "\n".join(lines)
 
 
@@ -881,16 +936,7 @@ def _error(title: str, content: str, **extra: Any) -> dict[str, Any]:
 
 
 def _detect_provider() -> str:
-    provider = os.getenv("AGENT_MODEL_PROVIDER", "auto")
-    if provider and provider != "auto":
-        return provider
-    if os.getenv("ARK_API_KEY"):
-        return "ark"
-    if os.getenv("OPENAI_API_KEY"):
-        return "openai"
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return "anthropic"
-    return "fake"
+    return detect_provider_from_env()
 
 
 def _command_cwd() -> Path:

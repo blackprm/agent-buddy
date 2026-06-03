@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,9 @@ from agent_core.core.agent import AgentRuntime, AgentRuntimeConfig
 from agent_core.model.base import ModelResponse
 from agent_core.model.fake import ScriptedModelClient
 from agent_core.quota.store import QuotaStore
+from agent_core.session.store import create_session_store
 from agent_core.session.sqlite_store import SQLiteSessionStore
+from agent_core.sqlite_utils import connect_sqlite
 from agent_core.tools.base import ToolRegistry
 from agent_core.types import TextBlock
 from agent_core.users.store import UserStore
@@ -104,6 +107,70 @@ def test_session_listing_can_be_filtered_by_user(tmp_path: Path) -> None:
     visible = sessions.list_sessions(user_id="alice")
 
     assert [session["id"] for session in visible] == ["alice-session"]
+
+
+def test_sqlite_session_store_creates_parent_directory_for_explicit_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "nested" / "session" / "sessions.db"
+
+    sessions = SQLiteSessionStore(db_path=db_path)
+    sessions.create_session(session_id="nested-session")
+
+    assert db_path.exists()
+    assert sessions.get_session("nested-session") is not None
+
+
+def test_sqlite_session_store_creates_parent_directory_for_url(tmp_path: Path) -> None:
+    db_path = tmp_path / "url" / "session" / "sessions.db"
+
+    sessions = SQLiteSessionStore(url=f"sqlite:///{db_path}")
+    sessions.create_session(session_id="url-session")
+
+    assert db_path.exists()
+    assert sessions.get_session("url-session") is not None
+
+
+def test_sqlite_session_store_accepts_directory_path(tmp_path: Path) -> None:
+    db_dir = tmp_path / "session-dir"
+    db_dir.mkdir()
+
+    sessions = SQLiteSessionStore(db_path=db_dir)
+    sessions.create_session(session_id="directory-session")
+
+    assert (db_dir / "sessions.db").exists()
+    assert sessions.get_session("directory-session") is not None
+
+
+def test_create_session_store_uses_session_store_path_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "env" / "session" / "sessions.db"
+    monkeypatch.delenv("SESSION_STORE_URL", raising=False)
+    monkeypatch.setenv("SESSION_STORE_PATH", str(db_path))
+
+    sessions = create_session_store()
+    sessions.create_session(session_id="env-path-session")
+
+    assert db_path.exists()
+    assert sessions.get_session("env-path-session") is not None
+
+
+def test_sqlite_session_store_strips_url_query_params(tmp_path: Path) -> None:
+    db_path = tmp_path / "url-query" / "sessions.db"
+
+    sessions = SQLiteSessionStore(url=f"sqlite:///{db_path}?cache=shared")
+    sessions.create_session(session_id="query-session")
+
+    assert db_path.exists()
+    assert not Path(f"{db_path}?cache=shared").exists()
+    assert sessions.get_session("query-session") is not None
+
+
+def test_sqlite_context_manager_closes_connection(tmp_path: Path) -> None:
+    db_path = tmp_path / "close-check.db"
+
+    with connect_sqlite(db_path) as conn:
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        conn.execute("SELECT 1")
 
 
 def test_runtime_factory_rejects_cross_user_session_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

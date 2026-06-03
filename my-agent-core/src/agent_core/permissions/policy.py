@@ -73,7 +73,20 @@ _SESSION_STATES: dict[str, SessionPermissionState] = {}
 
 READ_TOOLS = {"read_text_file", "list_directory", "grep", "glob"}
 WEB_TOOLS = {"WebFetch", "WebSearch"}
-ALWAYS_SAFE_TOOLS = {"echo", "ToolSearch", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "EnterPlanMode"}
+ALWAYS_SAFE_TOOLS = {
+    "echo",
+    "ToolSearch",
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+    "EnterPlanMode",
+    "UnderstandImage",
+    "TeamList",
+    "ReadInbox",
+    "SendMessage",
+}
 WRITE_TOOLS = {"write_text_file", "edit_file"}
 FILE_TOOLS = READ_TOOLS | WRITE_TOOLS
 SAFE_ENV_VARS = {"CI", "TERM", "NO_COLOR", "FORCE_COLOR", "PYTHONPATH", "PATH", "HOME", "PWD", "LANG", "LC_ALL"}

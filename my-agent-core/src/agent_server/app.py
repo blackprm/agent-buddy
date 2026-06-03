@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from email import policy
+from email.parser import BytesParser
 import json
 import os
 import re
@@ -11,9 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response as FastAPIResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent_core.adapters.web import agent_sse, event_to_chat_json
@@ -24,7 +27,7 @@ from agent_core.integrations.feishu import FeishuApiTool, FeishuTokenStore
 from agent_core.integrations.feishu_ws_bridge import FeishuWebSocketBridge
 from agent_core.plan_mode import export_plan_metadata, get_plan
 from agent_core.quota.store import QuotaStore
-from agent_core.session.store import create_session_store
+from agent_core.session.store import create_session_store, deserialize_message
 from agent_core.tools.base import ToolContext
 from agent_core.users.store import UserStore
 from agent_server.admin import (
@@ -34,19 +37,35 @@ from agent_server.admin import (
     print_generated_admin_token_once,
     router as admin_router,
 )
-from agent_server.runtime_factory import create_runtime, create_worktree_manager, get_task_store
+from agent_core.images import ImageInput
+from agent_server.runtime_factory import clear_image_generation_client_cache, create_runtime, create_worktree_manager, get_attachment_store, get_image_generation_client, get_task_store
+from agent_server.runtime_factory import default_prompt_template_name, get_session_prompt_template, list_prompt_templates
 from agent_server.searxng_service import searxng_service
 from agent_server.slash_commands import command_specs, handle_slash_command
 from agent_server.task_manager import agent_task_manager
+from agent_server.codex_credentials import codex_credential_source, codex_login_status, delete_codex_credentials, save_codex_credentials, start_codex_login_flow
+from agent_server.model_providers import env_model_selection
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _content_disposition_inline(filename: str) -> str:
+    """Build a latin-1-safe Content-Disposition value for arbitrary filenames."""
+    basename = Path(filename or "attachment").name or "attachment"
+    ascii_fallback = basename.encode("ascii", "ignore").decode("ascii").strip() or "attachment"
+    if ascii_fallback.startswith("."):
+        ascii_suffix = Path(basename).suffix.encode("ascii", "ignore").decode("ascii")
+        ascii_fallback = f"attachment{ascii_suffix}"
+    ascii_fallback = ascii_fallback.replace("\\", "\\\\").replace('"', r"\"")
+    encoded = quote(basename.encode("utf-8"), safe="")
+    return f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
 
 
 class AgentRequest(BaseModel):
     message: str = Field(..., min_length=1)
     mode: str | None = Field(
         default=None,
-        description="fake | fake_tool | anthropic；不传时读取 AGENT_MODEL_PROVIDER，默认 fake。",
+        description="模型 provider；不传时读取 AGENT_MODEL_PROVIDER/ProviderSpec 自动探测。",
     )
     session_id: str | None = None
 
@@ -67,6 +86,57 @@ class CreateTerminalSessionRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class TerminalSessionConfigRequest(BaseModel):
+    prompt_template: str | None = None
+    title: str | None = None
+
+
+class TerminalAttachmentRef(BaseModel):
+    id: str
+    filename: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+
+
+class ImagePlaygroundRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    mode: str = Field(default="generate", pattern="^(generate|edit)$")
+    size: str = "1024x1024"
+    quality: str | None = None
+    output_format: str = "png"
+    n: int = Field(default=1, ge=1, le=10)
+    input_attachment_ids: list[str] = Field(default_factory=list)
+    mask_attachment_id: str | None = None
+
+
+def _parse_multipart_file(body: bytes, content_type: str, *, field_name: str = "file") -> tuple[str, str | None, bytes]:
+    """Parse a single multipart file without depending on python-multipart.
+
+    Starlette's ``request.form()`` requires the optional python-multipart
+    package.  The terminal image upload should still work in lightweight dev
+    installs, so keep a narrow stdlib fallback for the one file field we need.
+    """
+    if not body:
+        raise ValueError("request body is empty")
+    if "multipart/form-data" not in (content_type or "").lower():
+        raise ValueError("request must be multipart/form-data")
+    raw = (
+        f"Content-Type: {content_type}\r\n"
+        "MIME-Version: 1.0\r\n\r\n"
+    ).encode("utf-8") + body
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    if not message.is_multipart():
+        raise ValueError("invalid multipart body")
+    for part in message.iter_parts():
+        params = dict(part.get_params(header="content-disposition") or [])
+        if params.get("name") != field_name:
+            continue
+        data = part.get_payload(decode=True) or b""
+        filename = str(params.get("filename") or "image")
+        return filename, part.get_content_type(), data
+    raise ValueError(f"{field_name} field is required")
+
+
 class TaskAssignRequest(BaseModel):
     owner: str = Field(..., min_length=1)
 
@@ -84,6 +154,19 @@ class FeishuTokenRequest(BaseModel):
 class FeishuAppCredentialsRequest(BaseModel):
     credential: str = Field(..., min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CodexCredentialsRequest(BaseModel):
+    secret: str = Field(..., min_length=1)
+    credential_type: str = Field(default="api_key", pattern="^(api_key|access_token|auth_json)$")
+    base_url: str = "http://localhost:8080/v1"
+    model: str = "gpt-5.4"
+    image_model: str = "gpt-image-2"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CodexLoginRequest(BaseModel):
+    flow: str = Field(default="browser", pattern="^(browser|device)$")
 
 
 _TERMINAL_COOKIE_NAME = "my_agent_terminal_token"
@@ -259,12 +342,48 @@ async def startup_bundled_services() -> None:
         print(f"[searxng] not running: {status_info.reason}", file=sys.stderr)
     elif status_info.running:
         print(f"[searxng] running at {status_info.endpoint} (pid={status_info.pid})", file=sys.stderr)
+    _autostart_feishu_bridges()
 
 
 @app.on_event("shutdown")
 async def shutdown_agent_tasks() -> None:
+    _stop_feishu_bridges()
     await agent_task_manager.shutdown()
     await searxng_service.stop()
+
+
+def _autostart_feishu_bridges() -> None:
+    """Restart Feishu message bridges that were enabled before a dev reload.
+
+    The websocket bridge is an in-process background thread, so uvicorn reloads
+    clear it. Persist only the user's intent in token metadata and recreate the
+    bridge at process startup to avoid silently losing Feishu messages.
+    """
+    for token in _feishu_token_store.list_tokens(include_secret=False):
+        metadata = dict(token.get("metadata") or {})
+        if token.get("credential_type") != "app_credentials" or not metadata.get("bridge_autostart"):
+            continue
+        user_id = str(token.get("user_id") or "")
+        org_id = str(token.get("org_id") or "")
+        if not user_id:
+            continue
+        try:
+            bridge = _feishu_ws_bridge.start(user_id=user_id, org_id=org_id)
+            print(f"[feishu] bridge autostarted for {user_id}/{org_id}: {bridge.get('state')}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[feishu] bridge autostart failed for {user_id}/{org_id}: {exc}", file=sys.stderr)
+
+
+def _stop_feishu_bridges() -> None:
+    for token in _feishu_token_store.list_tokens(include_secret=False):
+        metadata = dict(token.get("metadata") or {})
+        if token.get("credential_type") != "app_credentials" or not metadata.get("bridge_autostart"):
+            continue
+        user_id = str(token.get("user_id") or "")
+        org_id = str(token.get("org_id") or "")
+        if user_id:
+            with contextlib.suppress(Exception):
+                _feishu_ws_bridge.stop(user_id=user_id, org_id=org_id)
 
 
 # ── HTTP routes ──────────────────────────────────────────────
@@ -522,6 +641,12 @@ async def terminal_create_session(request: CreateTerminalSessionRequest, http_re
     if request.session_id:
         _assert_session_access(store.get_session(request.session_id), user_ctx)
     metadata = {**(request.metadata or {}), "user_id": user_ctx["user"]["id"], "org_id": user_ctx["organization"]["id"]}
+    if metadata.get("prompt_template"):
+        prompt_template = str(metadata["prompt_template"]).strip()
+        known_templates = {str(item.get("name") or "") for item in list_prompt_templates()}
+        if prompt_template not in known_templates:
+            raise HTTPException(status_code=400, detail=f"Prompt template '{prompt_template}' not found")
+        metadata["prompt_template"] = prompt_template
     sid = store.create_session(
         session_id=request.session_id,
         metadata=metadata,
@@ -530,6 +655,33 @@ async def terminal_create_session(request: CreateTerminalSessionRequest, http_re
     )
     info = store.get_session(sid)
     return info or {"id": sid, "metadata": request.metadata or {}}
+
+
+@app.put("/terminal/api/sessions/{session_id}/config", dependencies=[Depends(require_terminal_auth)])
+async def terminal_update_session_config(session_id: str, request: TerminalSessionConfigRequest, http_request: Request) -> dict[str, Any]:
+    store = create_session_store()
+    user_ctx = get_default_user_context(http_request)
+    info = store.get_session(session_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    _assert_session_access(info, user_ctx)
+    metadata = dict((info or {}).get("metadata") or {})
+    if request.prompt_template is not None:
+        prompt_template = request.prompt_template.strip() or default_prompt_template_name()
+        known_templates = {str(item.get("name") or "") for item in list_prompt_templates()}
+        if prompt_template not in known_templates:
+            raise HTTPException(status_code=400, detail=f"Prompt template '{prompt_template}' not found")
+        metadata["prompt_template"] = prompt_template
+    if request.title is not None:
+        metadata["title"] = request.title.strip()
+    store.update_session_metadata(session_id, metadata)
+    return store.get_session(session_id) or {"id": session_id, "metadata": metadata}
+
+
+@app.get("/terminal/api/prompts", dependencies=[Depends(require_terminal_auth)])
+async def terminal_list_prompt_templates() -> dict[str, Any]:
+    templates = list_prompt_templates()
+    return {"default": default_prompt_template_name(), "templates": templates}
 
 
 @app.delete("/terminal/api/sessions/{session_id}", dependencies=[Depends(require_terminal_auth)])
@@ -560,6 +712,215 @@ async def terminal_session_tasks(session_id: str, request: Request) -> dict[str,
     task_store = get_task_store().for_task_list(session_id)
     tasks = [task.to_dict() for task in task_store.list(include_internal=False)]
     return {"task_list_id": task_store.task_list_id, "tasks_dir": str(task_store.tasks_dir), "tasks": tasks}
+
+
+@app.post("/terminal/api/sessions/{session_id}/attachments/media", dependencies=[Depends(require_terminal_auth)])
+async def terminal_upload_media_attachment(session_id: str, request: Request) -> dict[str, Any]:
+    store = create_session_store()
+    user_ctx = get_default_user_context(request)
+    _assert_session_access(store.get_session(session_id), user_ctx)
+    filename = "image"
+    content_type = None
+    try:
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="file field is required")
+        data = await upload.read()
+        filename = getattr(upload, "filename", None) or "image"
+        content_type = getattr(upload, "content_type", None)
+    except AssertionError:
+        # python-multipart is not installed; fall back to a narrow stdlib parser.
+        try:
+            filename, content_type, data = _parse_multipart_file(await request.body(), request.headers.get("content-type") or "")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        if "python-multipart" not in str(exc):
+            raise
+        try:
+            filename, content_type, data = _parse_multipart_file(await request.body(), request.headers.get("content-type") or "")
+        except ValueError as parse_exc:
+            raise HTTPException(status_code=400, detail=str(parse_exc)) from parse_exc
+    try:
+        item = get_attachment_store().save_media(
+            data=data,
+            filename=filename,
+            content_type=content_type,
+            user_id=user_ctx["user"]["id"],
+            org_id=user_ctx["organization"]["id"],
+            session_id=session_id,
+            metadata={"source": "terminal-ui"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"attachment": item.to_dict()}
+
+
+@app.post("/terminal/api/sessions/{session_id}/attachments/images", dependencies=[Depends(require_terminal_auth)])
+async def terminal_upload_image_attachment(session_id: str, request: Request) -> dict[str, Any]:
+    return await terminal_upload_media_attachment(session_id, request)
+
+
+@app.get("/terminal/api/sessions/{session_id}/attachments/{attachment_id}/content", dependencies=[Depends(require_terminal_auth)])
+async def terminal_attachment_content(session_id: str, attachment_id: str, request: Request) -> FastAPIResponse:
+    store = create_session_store()
+    user_ctx = get_default_user_context(request)
+    _assert_session_access(store.get_session(session_id), user_ctx)
+    item = get_attachment_store().get_authorized(
+        attachment_id=attachment_id,
+        user_id=user_ctx["user"]["id"],
+        org_id=user_ctx["organization"]["id"],
+        session_id=session_id,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    data = get_attachment_store().read_bytes(item)
+    disposition = _content_disposition_inline(item.filename)
+    range_header = request.headers.get("range") or ""
+    if range_header.startswith("bytes="):
+        start_text, _, end_text = range_header[6:].partition("-")
+        try:
+            start = int(start_text) if start_text else 0
+            end = int(end_text) if end_text else len(data) - 1
+        except ValueError:
+            start, end = 0, len(data) - 1
+        start = max(0, min(start, len(data) - 1)) if data else 0
+        end = max(start, min(end, len(data) - 1)) if data else 0
+        chunk = data[start : end + 1]
+        return FastAPIResponse(
+            content=chunk,
+            status_code=206,
+            media_type=item.content_type,
+            headers={
+                "Cache-Control": "private, max-age=300",
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes {start}-{end}/{len(data)}",
+                "Content-Length": str(len(chunk)),
+                "Content-Disposition": disposition,
+            },
+        )
+    return FastAPIResponse(
+        content=data,
+        media_type=item.content_type,
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(data)),
+            "Content-Disposition": disposition,
+        },
+    )
+
+
+@app.post("/terminal/api/sessions/{session_id}/image-playground/generate", dependencies=[Depends(require_terminal_auth)])
+async def terminal_image_playground_generate(session_id: str, request: ImagePlaygroundRequest, http_request: Request) -> dict[str, Any]:
+    return await _terminal_image_playground(session_id=session_id, request=request, http_request=http_request, force_mode="generate")
+
+
+@app.post("/terminal/api/sessions/{session_id}/image-playground/edit", dependencies=[Depends(require_terminal_auth)])
+async def terminal_image_playground_edit(session_id: str, request: ImagePlaygroundRequest, http_request: Request) -> dict[str, Any]:
+    return await _terminal_image_playground(session_id=session_id, request=request, http_request=http_request, force_mode="edit")
+
+
+async def _terminal_image_playground(session_id: str, request: ImagePlaygroundRequest, http_request: Request, *, force_mode: str) -> dict[str, Any]:
+    store = create_session_store()
+    user_ctx = get_default_user_context(http_request)
+    _assert_session_access(store.get_session(session_id), user_ctx)
+    image_client = get_image_generation_client()
+    if image_client is None:
+        raise HTTPException(status_code=400, detail="Image generation is not configured. Set AGENT_IMAGE_MODEL/API key/base URL.")
+    mode = force_mode or request.mode
+    attachment_store = get_attachment_store()
+    input_images: list[ImageInput] = []
+    for attachment_id in request.input_attachment_ids[:16]:
+        item = attachment_store.get_authorized(
+            attachment_id=attachment_id,
+            user_id=user_ctx["user"]["id"],
+            org_id=user_ctx["organization"]["id"],
+            session_id=session_id,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"input attachment not found: {attachment_id}")
+        if not item.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail=f"input attachment must be an image: {attachment_id}")
+        input_images.append(ImageInput(data=attachment_store.read_bytes(item), content_type=item.content_type, filename=item.filename))
+    mask = None
+    if request.mask_attachment_id:
+        mask_item = attachment_store.get_authorized(
+            attachment_id=request.mask_attachment_id,
+            user_id=user_ctx["user"]["id"],
+            org_id=user_ctx["organization"]["id"],
+            session_id=session_id,
+        )
+        if mask_item is None:
+            raise HTTPException(status_code=404, detail=f"mask attachment not found: {request.mask_attachment_id}")
+        if not mask_item.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="mask attachment must be an image")
+        mask = ImageInput(data=attachment_store.read_bytes(mask_item), content_type=mask_item.content_type, filename=mask_item.filename)
+    if mode == "edit" and not input_images:
+        raise HTTPException(status_code=400, detail="edit mode requires at least one input image attachment")
+    try:
+        if mode == "edit":
+            result = await image_client.edit_image(
+                prompt=request.prompt,
+                input_images=input_images,
+                mask=mask,
+                size=request.size,
+                quality=request.quality,
+                output_format=request.output_format,
+                n=request.n,
+            )
+        else:
+            result = await image_client.generate_image(
+                prompt=request.prompt,
+                size=request.size,
+                quality=request.quality,
+                output_format=request.output_format,
+                n=request.n,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    attachments = []
+    for idx, image in enumerate(result.images, 1):
+        item = attachment_store.save_media(
+            data=image.data,
+            filename=f"image-playground-{mode}-{idx}.{_extension_for_content_type(image.content_type)}",
+            content_type=image.content_type,
+            user_id=user_ctx["user"]["id"],
+            org_id=user_ctx["organization"]["id"],
+            session_id=session_id,
+            metadata={
+                "source": "image-playground",
+                "operation": mode,
+                "prompt": request.prompt,
+                "size": request.size,
+                "quality": request.quality,
+                "output_format": request.output_format,
+                "input_attachment_ids": request.input_attachment_ids,
+                "mask_attachment_id": request.mask_attachment_id,
+                "revised_prompt": image.revised_prompt,
+                "raw_url": image.raw_url,
+                "image_metadata": image.metadata,
+                "generation_metadata": {k: v for k, v in result.metadata.items() if k != "raw_response"},
+            },
+        )
+        data = item.to_dict()
+        data["preview_url"] = f"/terminal/api/sessions/{session_id}/attachments/{item.id}/content"
+        attachments.append(data)
+    return {
+        "attachments": attachments,
+        "metadata": {k: v for k, v in result.metadata.items() if k != "raw_response"},
+    }
+
+
+def _extension_for_content_type(content_type: str) -> str:
+    if content_type == "image/jpeg":
+        return "jpg"
+    if content_type == "image/webp":
+        return "webp"
+    if content_type == "image/gif":
+        return "gif"
+    return "png"
 
 
 @app.post("/terminal/api/sessions/{session_id}/tasks/{task_id}/assign", dependencies=[Depends(require_terminal_auth)])
@@ -596,21 +957,20 @@ async def terminal_quota(request: Request) -> dict[str, Any]:
 
 
 @app.get("/terminal/api/config", dependencies=[Depends(require_terminal_auth)])
-async def terminal_config(request: Request) -> dict[str, Any]:
-    provider = os.getenv("AGENT_MODEL_PROVIDER", "auto")
-    if not provider or provider == "auto":
-        if os.getenv("ARK_API_KEY"):
-            provider = "ark"
-        elif os.getenv("OPENAI_API_KEY"):
-            provider = "openai"
-        elif os.getenv("ANTHROPIC_API_KEY"):
-            provider = "anthropic"
-        else:
-            provider = "fake"
+async def terminal_config(request: Request, session_id: str | None = None) -> dict[str, Any]:
+    selection = env_model_selection()
     user_ctx = get_default_user_context(request)
+    if session_id:
+        _assert_session_access(create_session_store().get_session(session_id), user_ctx)
+    prompt_templates = list_prompt_templates()
     return {
-        "model_provider": provider,
-        "model_id": os.getenv("MODEL_ID") or os.getenv("ARK_MODEL") or os.getenv("OPENAI_MODEL") or os.getenv("ANTHROPIC_MODEL") or "",
+        "model_provider": selection["model_provider"],
+        "model_id": selection["model_id"],
+        "prompt_template": get_session_prompt_template(session_id),
+        "default_prompt_template": default_prompt_template_name(),
+        "prompt_templates": prompt_templates,
+        "codex_credentials": codex_credential_source(),
+        "context_window": 200_000,
         "user": user_ctx["user"],
         "organization": user_ctx["organization"],
         "quota": _quota_store.status(
@@ -618,6 +978,48 @@ async def terminal_config(request: Request) -> dict[str, Any]:
             org_id=user_ctx["organization"]["id"],
         ),
     }
+
+
+@app.get("/terminal/api/integrations/codex", dependencies=[Depends(require_terminal_auth)])
+async def terminal_codex_status() -> dict[str, Any]:
+    return codex_credential_source()
+
+
+@app.put("/terminal/api/integrations/codex", dependencies=[Depends(require_terminal_auth)])
+async def terminal_save_codex_credentials(request: CodexCredentialsRequest) -> dict[str, Any]:
+    try:
+        credentials = save_codex_credentials(
+            secret=request.secret,
+            credential_type=request.credential_type,
+            base_url=request.base_url,
+            model=request.model,
+            image_model=request.image_model,
+            metadata={**request.metadata, "source": request.metadata.get("source") or "terminal-ui"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    clear_image_generation_client_cache()
+    return {"codex": codex_credential_source(), "source": credentials.source, "auth_mode": credentials.auth_mode}
+
+
+@app.delete("/terminal/api/integrations/codex", dependencies=[Depends(require_terminal_auth)])
+async def terminal_delete_codex_credentials() -> dict[str, Any]:
+    deleted = delete_codex_credentials()
+    clear_image_generation_client_cache()
+    return {"deleted": deleted, "codex": codex_credential_source()}
+
+
+@app.post("/terminal/api/integrations/codex/login", dependencies=[Depends(require_terminal_auth)])
+async def terminal_start_codex_login(request: CodexLoginRequest) -> dict[str, Any]:
+    try:
+        return start_codex_login_flow(flow=request.flow)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/terminal/api/integrations/codex/login", dependencies=[Depends(require_terminal_auth)])
+async def terminal_get_codex_login_status() -> dict[str, Any]:
+    return codex_login_status()
 
 
 @app.get("/terminal/api/integrations/feishu", dependencies=[Depends(require_terminal_auth)])
@@ -655,12 +1057,14 @@ async def terminal_save_feishu_token(request: FeishuTokenRequest, http_request: 
 async def terminal_save_feishu_app_credentials(request: FeishuAppCredentialsRequest, http_request: Request) -> dict[str, Any]:
     parsed = _parse_feishu_app_credential(request.credential)
     user_ctx = get_default_user_context(http_request)
+    existing = _feishu_token_store.get_user_token(user_id=user_ctx["user"]["id"], org_id=user_ctx["organization"]["id"])
+    existing_metadata = dict((existing or {}).get("metadata") or {})
     token = _feishu_token_store.save_app_credentials(
         user_id=user_ctx["user"]["id"],
         org_id=user_ctx["organization"]["id"],
         app_id=parsed["app_id"],
         app_secret=parsed["app_secret"],
-        metadata={"source": "terminal-ui", "mode": "app_credentials", **request.metadata},
+        metadata={**existing_metadata, "source": "terminal-ui", "mode": "app_credentials", **request.metadata},
     )
     return {"status": "connected", "feishu": token}
 
@@ -726,23 +1130,29 @@ async def terminal_feishu_bridge_logs(request: Request, limit: int = 100) -> dic
 @app.post("/terminal/api/integrations/feishu/bridge/start", dependencies=[Depends(require_terminal_auth)])
 async def terminal_start_feishu_bridge(request: Request) -> dict[str, Any]:
     user_ctx = get_default_user_context(request)
+    user_id = user_ctx["user"]["id"]
+    org_id = user_ctx["organization"]["id"]
     try:
         bridge = _feishu_ws_bridge.start(
-            user_id=user_ctx["user"]["id"],
-            org_id=user_ctx["organization"]["id"],
+            user_id=user_id,
+            org_id=org_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _feishu_token_store.update_metadata(user_id=user_id, org_id=org_id, metadata={"bridge_autostart": True})
     return {"status": bridge.get("state") or "starting", "bridge": bridge}
 
 
 @app.post("/terminal/api/integrations/feishu/bridge/stop", dependencies=[Depends(require_terminal_auth)])
 async def terminal_stop_feishu_bridge(request: Request) -> dict[str, Any]:
     user_ctx = get_default_user_context(request)
+    user_id = user_ctx["user"]["id"]
+    org_id = user_ctx["organization"]["id"]
     bridge = _feishu_ws_bridge.stop(
-        user_id=user_ctx["user"]["id"],
-        org_id=user_ctx["organization"]["id"],
+        user_id=user_id,
+        org_id=org_id,
     )
+    _feishu_token_store.update_metadata(user_id=user_id, org_id=org_id, metadata={"bridge_autostart": False})
     return {"status": bridge.get("state") or "stopped", "bridge": bridge}
 
 
@@ -991,6 +1401,7 @@ async def terminal_ws(websocket: WebSocket, session_id: str | None = None) -> No
     # ── 回放历史消息（JSON 格式）──
     from agent_core.types import TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock
 
+    tool_names_by_id: dict[str, str] = {}
     for msg in runtime.messages:
         for block in msg.content:
             if isinstance(block, TextBlock):
@@ -1002,20 +1413,26 @@ async def terminal_ws(websocket: WebSocket, session_id: str | None = None) -> No
                     }, ensure_ascii=False))
                 elif msg.role == "user":
                     await websocket.send_text(json.dumps({
-                        "type": "history_user", "text": block.text,
+                        "type": "history_user", "text": msg.metadata.get("original_user_input") or block.text,
+                        "attachments": msg.metadata.get("attachments") or [],
                     }, ensure_ascii=False))
                 else:
                     await websocket.send_text(json.dumps({
                         "type": "history_assistant", "text": block.text,
                     }, ensure_ascii=False))
             elif isinstance(block, ToolUseBlock):
+                tool_names_by_id[block.id] = block.name
                 await websocket.send_text(json.dumps({
                     "type": "history_tool_use", "tool": block.name, "input": block.input,
+                    "tool_use_id": block.id,
                 }, ensure_ascii=False))
             elif isinstance(block, ToolResultBlock):
+                tool_name = tool_names_by_id.get(block.tool_use_id, "?")
                 await websocket.send_text(json.dumps({
-                    "type": "history_tool_result", "tool": "?",
+                    "type": "history_tool_result", "tool": tool_name,
+                    "tool_use_id": block.tool_use_id,
                     "result": block.content[:500], "is_error": block.is_error,
+                    "metadata": block.metadata,
                 }, ensure_ascii=False))
             elif isinstance(block, ThinkingBlock):
                 await websocket.send_text(json.dumps({
@@ -1132,6 +1549,65 @@ async def terminal_ws(websocket: WebSocket, session_id: str | None = None) -> No
                         )
                     elif parsed.get("type") == "abort":
                         await agent_task_manager.abort(effective_session_id)
+                    elif parsed.get("type") == "user_message":
+                        line = str(parsed.get("text") or "").strip()
+                        raw_attachments = parsed.get("attachments") if isinstance(parsed.get("attachments"), list) else []
+                        attachments: list[dict[str, Any]] = []
+                        for raw in raw_attachments:
+                            if not isinstance(raw, dict):
+                                continue
+                            attachment_id = str(raw.get("id") or raw.get("attachment_id") or "").strip()
+                            if not attachment_id:
+                                continue
+                            item = get_attachment_store().get_authorized(
+                                attachment_id=attachment_id,
+                                user_id=effective_user_id,
+                                org_id=effective_org_id,
+                                session_id=effective_session_id,
+                            )
+                            if item is None:
+                                await websocket.send_text(json.dumps({
+                                    "type": "error",
+                                    "message": f"Attachment not found or not accessible: {attachment_id}",
+                                }, ensure_ascii=False))
+                                continue
+                            attachments.append(item.to_dict())
+                        if not line and not attachments:
+                            continue
+                        if line.startswith("/") and not attachments:
+                            result = await handle_slash_command(
+                                line,
+                                session_id=effective_session_id,
+                                session_store=command_session_store,
+                                is_running=agent_task_manager.is_running,
+                                abort=agent_task_manager.abort,
+                                compact=compact_session,
+                                user_context=user_ctx,
+                            )
+                            await websocket.send_text(json.dumps(result, ensure_ascii=False, default=str))
+                            continue
+                        if await agent_task_manager.is_running(effective_session_id):
+                            await websocket.send_text(json.dumps({
+                                "type": "agent_status",
+                                "running": True,
+                                "session_id": effective_session_id,
+                            }, ensure_ascii=False))
+                            continue
+                        turn_runtime = create_runtime(session_id=effective_session_id, ask_callback=None, user_id=effective_user_id, org_id=effective_org_id)
+                        managed = await agent_task_manager.start(
+                            session_id=effective_session_id,
+                            runtime=turn_runtime,
+                            message=line or "Please inspect the attached media file(s).",
+                            attachments=attachments,
+                        )
+                        if managed is None:
+                            continue
+                        last_task_seq = 0
+                        await websocket.send_text(json.dumps({
+                            "type": "agent_status",
+                            "running": True,
+                            "session_id": effective_session_id,
+                        }, ensure_ascii=False))
                     continue
             except (json.JSONDecodeError, TypeError):
                 pass

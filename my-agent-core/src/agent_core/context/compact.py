@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
@@ -41,6 +42,30 @@ AUTOCOMPACT_BUFFER_TOKENS = 13_000
 
 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
 """连续自动压缩失败熔断阈值。"""
+
+
+def _env_float(names: tuple[str, ...], default: float) -> float:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return float(raw.strip())
+        except ValueError:
+            return default
+    return default
+
+
+def _default_compact_stream_idle_timeout_seconds() -> float:
+    return _env_float(
+        (
+            "AGENT_COMPACT_STREAM_IDLE_TIMEOUT_SECONDS",
+            "AGENT_MODEL_STREAM_IDLE_TIMEOUT_SECONDS",
+            "COMPACT_STREAM_IDLE_TIMEOUT_SECONDS",
+            "MODEL_STREAM_IDLE_TIMEOUT_SECONDS",
+        ),
+        120.0,
+    )
 
 COMPACT_PROMPT = """\
 CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
@@ -150,6 +175,7 @@ def micro_compact(
                     tool_use_id=block.tool_use_id,
                     content=MICRO_COMPACT_CLEARED,
                     is_error=block.is_error,
+                    metadata=block.metadata,
                 )
                 changed = True
         if changed:
@@ -245,6 +271,10 @@ async def _stream_with_idle_timeout(
 ) -> AsyncIterator[StreamDelta]:
     """为 full compact 摘要请求增加 idle timeout，避免压缩阶段无限等待。"""
     iterator = stream.__aiter__()
+    if timeout <= 0:
+        async for delta in iterator:
+            yield delta
+        return
     while True:
         try:
             delta = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
@@ -343,8 +373,8 @@ class AutoCompactConfig:
 
     max_consecutive_failures: int = MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
 
-    compact_stream_idle_timeout_seconds: float = 120.0
-    """Full compact 摘要请求两次 delta 之间的最大空闲时间。"""
+    compact_stream_idle_timeout_seconds: float = field(default_factory=_default_compact_stream_idle_timeout_seconds)
+    """Full compact 摘要请求两次 delta 之间的最大空闲时间；<=0 表示禁用 idle timeout。"""
 
     @property
     def effective_context_window(self) -> int:
@@ -383,7 +413,11 @@ class AutoCompactor:
         if self._consecutive_failures >= self._config.max_consecutive_failures:
             return False
 
-        token_count = token_count_with_estimation(messages)
+        token_count = token_count_with_estimation(
+            messages,
+            last_exact_count=self._last_exact_count,
+            last_exact_index=self._last_exact_index,
+        )
         return token_count >= self._config.auto_compact_threshold
 
     async def compact_if_needed(

@@ -18,6 +18,14 @@ from pathlib import Path
 from typing import Any
 
 
+_SEARXNG_BOOTSTRAP = """
+import concurrent.futures.thread
+from searx.webapp import run
+
+run()
+""".strip()
+
+
 @dataclass(slots=True)
 class SearxngStatus:
     enabled: bool
@@ -96,7 +104,7 @@ class SearxngService:
             }
         )
         self._process = subprocess.Popen(
-            [sys.executable, "-m", "searx.webapp"],
+            [sys.executable, "-c", _SEARXNG_BOOTSTRAP],
             cwd=str(self._source_dir),
             env=env,
             stdout=subprocess.PIPE,

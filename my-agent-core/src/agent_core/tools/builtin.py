@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import os
 import re
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_core.recovery.tool_errors import format_exception_detail
 from agent_core.sandbox import get_sandbox_manager
 from agent_core.tools.base import ToolContext, ToolRegistry, ToolResult
 
@@ -396,7 +398,7 @@ class ReadTextFileTool:
                     content = f"(lines {start+1}-{min(end, len(lines))} of {len(lines)})\n{content}"
             return ToolResult(content=content)
         except Exception as exc:
-            return ToolResult(content=f"read failed: {exc}", is_error=True)
+            return ToolResult(content=f"read failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 # ── 写文件 ──────────────────────────────────────────────────
@@ -435,7 +437,7 @@ class WriteTextFileTool:
             lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
             return ToolResult(content=f"Wrote {lines} lines to {path}")
         except Exception as exc:
-            return ToolResult(content=f"write failed: {exc}", is_error=True)
+            return ToolResult(content=f"write failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 # ── 编辑文件（搜索替换）──────────────────────────────────────
@@ -519,7 +521,7 @@ class EditFileTool:
                 return ToolResult(content=f"Replaced {count} occurrence(s) in {path}")
 
         except Exception as exc:
-            return ToolResult(content=f"edit failed: {exc}", is_error=True)
+            return ToolResult(content=f"edit failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 # ── 列出目录 ────────────────────────────────────────────────
@@ -582,7 +584,7 @@ class ListDirectoryTool:
             result = "\n".join(lines) if lines else "(empty directory)"
             return ToolResult(content=result)
         except Exception as exc:
-            return ToolResult(content=f"list failed: {exc}", is_error=True)
+            return ToolResult(content=f"list failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 # ── 搜索文件内容 (grep) ─────────────────────────────────────
@@ -647,7 +649,7 @@ class GrepTool:
                 return ToolResult(content="No matches found")
             return ToolResult(content="\n".join(results))
         except Exception as exc:
-            return ToolResult(content=f"grep failed: {exc}", is_error=True)
+            return ToolResult(content=f"grep failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 # ── 查找文件 (glob) ─────────────────────────────────────────
@@ -690,7 +692,7 @@ class GlobTool:
                 return ToolResult(content="No files matched the pattern")
             return ToolResult(content="\n".join(results))
         except Exception as exc:
-            return ToolResult(content=f"glob failed: {exc}", is_error=True)
+            return ToolResult(content=f"glob failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 # ── 执行 Shell 命令 ─────────────────────────────────────────
@@ -921,6 +923,7 @@ class BashTool:
 
     async def call(self, tool_input: dict, context: ToolContext) -> ToolResult:
         process: asyncio.subprocess.Process | None = None
+        readers: list[asyncio.Task] = []
         try:
             raw_command, err = _required_input(tool_input, "command", aliases=("cmd", "shell_command"))
             if err:
@@ -1041,8 +1044,31 @@ class BashTool:
             )
         except asyncio.TimeoutError:
             return ToolResult(content="Command timed out", is_error=True)
+        except asyncio.CancelledError:
+            for reader in readers:
+                reader.cancel()
+            if readers:
+                await asyncio.gather(*readers, return_exceptions=True)
+            if process and process.returncode is None:
+                try:
+                    if process.pid:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    else:
+                        process.terminate()
+                    await asyncio.wait_for(process.wait(), timeout=2)
+                except ProcessLookupError:
+                    pass
+                except asyncio.TimeoutError:
+                    with contextlib.suppress(ProcessLookupError):
+                        if process.pid:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        else:
+                            process.kill()
+                    with contextlib.suppress(Exception):
+                        await process.wait()
+            raise
         except Exception as exc:
-            return ToolResult(content=f"bash failed: {exc}", is_error=True)
+            return ToolResult(content=f"bash failed:\n{format_exception_detail(exc)}", is_error=True)
 
 
 class BashOutputTool:

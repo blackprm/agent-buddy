@@ -62,6 +62,21 @@ def test_feishu_token_store_saves_app_credentials_without_exposing_secret(tmp_pa
     assert status["credential_type"] == "app_credentials"
 
 
+def test_feishu_token_store_updates_metadata_and_lists_tokens(tmp_path: Path) -> None:
+    store = FeishuTokenStore(tmp_path / "feishu.db")
+    store.save_app_credentials(user_id="alice", org_id="org", app_id="cli_xxx", app_secret="secret", metadata={"source": "test"})
+
+    updated = store.update_metadata(user_id="alice", org_id="org", metadata={"bridge_autostart": True})
+    tokens = store.list_tokens()
+
+    assert updated is not None
+    assert updated["metadata"]["source"] == "test"
+    assert updated["metadata"]["bridge_autostart"] is True
+    assert tokens[0]["user_id"] == "alice"
+    assert tokens[0]["metadata"]["bridge_autostart"] is True
+    assert "app_secret" not in tokens[0]
+
+
 async def test_feishu_api_tool_uses_current_user_token_and_redacts_response(tmp_path: Path) -> None:
     store = FeishuTokenStore(tmp_path / "feishu.db")
     store.save_user_token(user_id="alice", org_id="org", access_token="alice-token")

@@ -616,6 +616,7 @@
       <div class="editor-panel">
         <div class="editor-toolbar">
           <div class="title" id="editor-title">No item selected</div>
+          <button class="btn" id="btn-soul-principles" title="Insert OpenClaw SOUL design principles">SOUL Principles</button>
           <button class="btn" id="btn-preview">Preview</button>
           <button class="btn btn-primary" id="btn-save">Save</button>
           <button class="btn btn-danger" id="btn-delete">Delete</button>
@@ -650,6 +651,7 @@
                         <option value="">未指定</option>
                         <option value="anthropic">Anthropic</option>
                         <option value="openai">OpenAI</option>
+                        <option value="codex">Codex</option>
                         <option value="ark">火山 Ark</option>
                         <option value="fake">调试 Fake</option>
                         <option value="gateway">自定义网关</option>
@@ -961,6 +963,28 @@
 
         function jsonPretty(obj) {
           return JSON.stringify(obj || {}, null, 2);
+        }
+
+        function yamlScalar(value) {
+          return JSON.stringify(value === undefined || value === null ? '' : String(value));
+        }
+
+        function designPrinciplesYaml(principles) {
+          var lines = ['design_principles:'];
+          (principles || []).forEach(function (item) {
+            lines.push('  - title: ' + yamlScalar(item.title || item.name || ''));
+            lines.push('    content: ' + yamlScalar(item.content || item.text || ''));
+            if (item.enabled === false) lines.push('    enabled: false');
+          });
+          return lines.join('\n') + '\n';
+        }
+
+        function replaceDesignPrinciplesBlock(yamlText, block) {
+          var pattern = /(^|\n)design_principles:\n(?:^[ \t]+.*\n?)*/m;
+          if (pattern.test(yamlText)) return yamlText.replace(pattern, function (match, prefix) { return prefix + block; });
+          var marker = /(^base_instructions:\s*\|\n(?:^[ \t]+.*\n?)*)/m;
+          if (marker.test(yamlText)) return yamlText.replace(marker, '$1\n' + block);
+          return block + '\n' + yamlText;
         }
 
         function parseJsonEditor() {
@@ -1352,6 +1376,7 @@
           document.getElementById('preview-title').textContent = resourceType === 'skills' ? 'Rendered Skill' : resourceType === 'models' ? 'Pricing Preview' : isAccountFormResource() ? 'Account Preview' : 'Rendered Preview';
           setModelFormVisible(resourceType === 'models');
           setAccountFormVisible(isAccountFormResource());
+          document.getElementById('btn-soul-principles').style.display = resourceType === 'prompts' ? '' : 'none';
           document.getElementById('btn-delete').style.display = isAccountFormResource() ? 'none' : '';
           document.getElementById('btn-user-quota').style.display = resourceType === 'users' ? '' : 'none';
           clearModelForm();
@@ -1576,6 +1601,7 @@
                 metadata: { name: name, description: desc, version: '1.0.0' },
                 product_name: 'MyAgent',
                 base_instructions: 'You are a helpful assistant.',
+                design_principles: [],
                 sections: [{ title: 'Basic Rules', content: '- Be concise and direct\n- Use tools when needed' }],
                 dynamic_sections: [{ name: 'cwd', compute: 'os_getcwd', cache_break: false }],
                 context: { prepend: {}, append: { session_id: 'auto' } },
@@ -1598,6 +1624,15 @@
         document.getElementById('tab-models').onclick = function () { setMode('models'); };
         document.getElementById('tab-users').onclick = function () { setMode('users'); };
         document.getElementById('tab-orgs').onclick = function () { setMode('orgs'); };
+        document.getElementById('btn-soul-principles').onclick = function () {
+          if (resourceType !== 'prompts') return;
+          api('GET', '/prompt-design-principles/default').then(function (payload) {
+            var next = replaceDesignPrinciplesBlock(getEditorValue(), designPrinciplesYaml(payload.principles || []));
+            setEditorValue(next);
+            modified = true;
+            toast('SOUL design principles inserted');
+          }).catch(function (e) { toast(e.message, 'error'); });
+        };
         document.getElementById('btn-logout').onclick = function () {
           fetch('/admin/logout', { method: 'POST' }).finally(function () { location.href = '/admin/login'; });
         };
@@ -1609,13 +1644,15 @@
             var userLine = cfg.user ? ('<br>User: <span class="provider">' + esc(cfg.user.id) + '</span>') : '';
             var orgLine = cfg.organization ? ('<br>Org: ' + esc(cfg.organization.id)) : '';
             var quotaLine = cfg.quota ? ('<br>Quota: ' + (cfg.quota.enabled ? 'on' : 'off')) : '';
+            var codex = cfg.codex_credentials || {};
+            var codexLine = '<br>Codex: ' + (codex.configured ? '<span class="provider">connected</span>' : 'off') + (codex.source ? (' · ' + esc(codex.source)) : '');
             document.getElementById('runtime-info').innerHTML =
               'Provider: <span class="provider">' + esc(cfg.model_provider) + '</span><br>' +
               'Model: ' + esc(cfg.model_id) + '<br>' +
               'Session: ' + esc(cfg.session_id) + '<br>' +
               'Permission: ' + esc((cfg.permissions && cfg.permissions.mode_title) || 'Default') +
               ' <span style="color:#71717a">(' + esc((cfg.permissions && cfg.permissions.mode) || 'default') + ')</span>' +
-              userLine + orgLine + quotaLine;
+              userLine + orgLine + quotaLine + codexLine;
           }).catch(function () {
             document.getElementById('runtime-info').textContent = 'Config unavailable';
           });

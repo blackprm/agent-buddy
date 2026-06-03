@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import traceback
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -51,6 +52,37 @@ def _truncate(text: str, limit: int = MAX_ERROR_CHARS) -> str:
 def _input_keys(tool_use: ToolUseBlock) -> str:
     keys = sorted((tool_use.input or {}).keys())
     return ", ".join(keys) if keys else "none"
+
+
+def format_exception_detail(exc: BaseException) -> str:
+    """Return the full exception payload that should be visible to the agent.
+
+    Tool wrappers often catch provider/client exceptions and convert them into
+    ToolResult(is_error=True).  If they only include ``str(exc)``, the next model
+    turn loses status codes, stderr/stdout, response bodies, chained exceptions,
+    and the traceback location.  Keep those details in the tool result content so
+    the agent can diagnose and choose a different recovery path.
+    """
+    parts = [f"{type(exc).__name__}: {exc}"]
+    code = getattr(exc, "returncode", getattr(exc, "code", None))
+    if code is not None:
+        parts.append(f"Exit code: {code}")
+    for attr, label in (("stderr", "STDERR"), ("stdout", "STDOUT")):
+        value = getattr(exc, attr, "")
+        if value:
+            parts.append(f"{label}:\n{value}")
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        text = getattr(response, "text", "")
+        if status is not None:
+            parts.append(f"HTTP status: {status}")
+        if text:
+            parts.append(f"HTTP response body:\n{text}")
+    traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    if traceback_text:
+        parts.append(f"Traceback:\n{traceback_text}")
+    return _truncate("\n".join(str(part) for part in parts if part))
 
 
 def classify_tool_failure(
@@ -138,18 +170,8 @@ def format_tool_exception(tool_use: ToolUseBlock, exc: BaseException) -> ToolFai
             retryable=True,
             metadata={"missingField": str(missing), "receivedKeys": sorted((tool_use.input or {}).keys())},
         )
-    message_parts = [f"Tool {tool_use.name} failed with {type(exc).__name__}: {exc}."]
-    stderr = getattr(exc, "stderr", "")
-    stdout = getattr(exc, "stdout", "")
     code = getattr(exc, "returncode", getattr(exc, "code", None))
-    if code is not None:
-        message_parts.append(f"Exit code {code}")
-    if stderr:
-        message_parts.append(f"STDERR:\n{stderr}")
-    if stdout:
-        message_parts.append(f"STDOUT:\n{stdout}")
-    message_parts.append(f"Received input keys: {keys_text}.")
-    message = _truncate("\n".join(str(part) for part in message_parts if part))
+    message = _truncate(f"Tool {tool_use.name} failed.\n{format_exception_detail(exc)}\nReceived input keys: {keys_text}.")
     return classify_tool_failure(tool_name=tool_use.name, content=message, metadata={"exitCode": code})
 
 

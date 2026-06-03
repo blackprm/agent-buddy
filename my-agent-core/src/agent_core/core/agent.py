@@ -28,10 +28,38 @@ from agent_core.tools.base import (
     ToolRegistry,
     ToolResult,
     partition_tool_calls,
-    execute_tools_concurrently,
-    execute_tools_serially,
+    tool_concurrency_group,
+    tool_max_concurrency,
 )
 from agent_core.types import Message, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock
+
+
+USER_INTERRUPT_MESSAGE = (
+    "[User interrupted the previous turn with Ctrl+C / abort. "
+    "Treat any in-progress work from that turn as cancelled; do not continue or retry it unless the user explicitly asks.]"
+)
+
+
+def _env_float(names: tuple[str, ...], default: float) -> float:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return float(raw.strip())
+        except ValueError:
+            return default
+    return default
+
+
+def _default_model_stream_idle_timeout_seconds() -> float:
+    return _env_float(
+        (
+            "AGENT_MODEL_STREAM_IDLE_TIMEOUT_SECONDS",
+            "MODEL_STREAM_IDLE_TIMEOUT_SECONDS",
+        ),
+        120.0,
+    )
 
 
 @dataclass(slots=True)
@@ -41,8 +69,8 @@ class AgentRuntimeConfig:
     metadata: dict = field(default_factory=dict)
     skill_store: Any | None = None
     max_output_tokens_recovery_limit: int = 3
-    model_stream_idle_timeout_seconds: float = 120.0
-    """模型流式响应两次 delta 之间的最大空闲时间，避免工具完成后无限等待。"""
+    model_stream_idle_timeout_seconds: float = field(default_factory=_default_model_stream_idle_timeout_seconds)
+    """模型流式响应两次 delta 之间的最大空闲时间；<=0 表示禁用 idle timeout。"""
     auto_compact_config: AutoCompactConfig | None = None
     """自动压缩配置。None 表示使用默认配置（200K 上下文窗口）。"""
     session_memory_enabled: bool = True
@@ -159,6 +187,30 @@ class AgentRuntime:
         self._messages = list(messages)
         self._turn_counter = len(messages)
 
+    def record_user_cancellation(self, *, reason: str = "external_abort", phase: str = "", persist: bool = True) -> bool:
+        """Append a user-visible interrupt marker so the next model turn sees Ctrl+C/abort.
+
+        Tool cancellations often happen outside the normal model loop (for example
+        a WebSocket Ctrl+C cancelling the background task).  Without an explicit
+        message in history, the next model call cannot know the user intentionally
+        stopped the previous turn and may continue stale long-running work.
+        """
+        if self._messages:
+            last = self._messages[-1]
+            if last.role == "user" and last.metadata.get("user_interrupt"):
+                return False
+        message = Message.user(USER_INTERRUPT_MESSAGE)
+        message.metadata.update({
+            "user_interrupt": True,
+            "reason": reason,
+            "phase": phase,
+        })
+        self._messages.append(message)
+        self._context_builder.clear_cache()
+        if persist:
+            self._persist()
+        return True
+
     async def compact_history(self, custom_instructions: str | None = None) -> ManualCompactResult:
         """手动压缩当前会话历史，并把 compact summary 写回 session。"""
         if not self._messages:
@@ -200,6 +252,7 @@ class AgentRuntime:
         self,
         user_input: str,
         *,
+        attachments: list[dict[str, Any]] | None = None,
         abort_event: asyncio.Event | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """运行 agent loop，以事件流形式产出每个阶段。
@@ -211,7 +264,32 @@ class AgentRuntime:
             user_input: 用户输入文本
             abort_event: 外部可设置的 asyncio.Event，设置后 loop 会在安全点中止
         """
-        self._messages.append(Message.user(user_input))
+        attachments = [dict(item) for item in (attachments or []) if isinstance(item, dict)]
+        user_message_text = user_input
+        if attachments:
+            lines = [user_input.rstrip(), "", "[User uploaded media attachments]"]
+            for idx, item in enumerate(attachments, 1):
+                attachment_id = str(item.get("id") or item.get("attachment_id") or "").strip()
+                filename = str(item.get("filename") or "media")
+                content_type = str(item.get("content_type") or "media")
+                size_bytes = item.get("size_bytes")
+                lines.append(
+                    f"{idx}. attachment_id={attachment_id} filename={filename} content_type={content_type} size_bytes={size_bytes}"
+                )
+            lines.append(
+                "Use the UnderstandImage tool with attachment_id for one item or attachment_ids for multiple/mixed images and videos when you need to inspect them."
+            )
+            user_message_text = "\n".join(lines).strip()
+        user_message = Message.user(user_message_text)
+        user_message.metadata["original_user_input"] = user_input
+        if attachments:
+            user_message.metadata["attachments"] = attachments
+        self._messages.append(user_message)
+        # Persist the user turn immediately so uploaded images/videos remain
+        # visible in history replay even if the browser reconnects while the
+        # agent is still running.  The full conversation is persisted again at
+        # normal loop checkpoints/completion.
+        self._persist()
         messages = self._messages
         system = await self._build_system_prompt()
         yield AgentEvent("loop_started", {"session_id": self._config.session_id, "cwd": self._config.cwd, "workspace": self._config.metadata.get("workspace")})
@@ -243,6 +321,7 @@ class AgentRuntime:
             for turn in range(1, self._config.max_turns + 1):
                 # ── 检查中止 ──
                 if abort_event and abort_event.is_set():
+                    self.record_user_cancellation(reason="external_abort", phase="before_turn")
                     yield AgentEvent("loop_aborted", {"turn": turn, "reason": "external_abort"})
                     self._persist()
                     return
@@ -302,6 +381,7 @@ class AgentRuntime:
                             continue
                         # 检查中止（在流式过程中也可以中断）
                         if abort_event and abort_event.is_set():
+                            self.record_user_cancellation(reason="external_abort", phase="streaming")
                             yield AgentEvent("loop_aborted", {"turn": turn, "reason": "external_abort", "phase": "streaming"})
                             self._persist()
                             return
@@ -445,6 +525,7 @@ class AgentRuntime:
                         yield AgentEvent("loop_aborted", {"turn": turn, "reason": "external_abort", "phase": "tool_execution"})
                         # 仍然把 tool_result 追加到 messages，保持 API 兼容
                         messages.append(Message(role="user", content=tool_result_blocks))
+                        self.record_user_cancellation(reason="external_abort", phase="tool_execution")
                         self._persist()
                         return
 
@@ -573,25 +654,31 @@ class AgentRuntime:
 
                     if batch.is_concurrency_safe:
                         # ── 并发执行 ──
-                        for tu in allowed_uses:
-                            yield AgentEvent("tool_started", {"tool_use_id": tu.id, "tool": tu.name, "input": tu.input, "concurrent": True})
-
-                        results = await execute_tools_concurrently(allowed_uses, self._tools, tool_context)
-
-                        for tu, result in results:
-                            if result.is_error:
-                                async for evt in self._process_tool_failure(tu, result):
+                        completed_results: dict[str, ToolResult] = {}
+                        async for item in self._execute_tools_concurrently_with_progress(allowed_uses, tool_context):
+                            if isinstance(item, AgentEvent):
+                                yield item
+                            else:
+                                tu, result = item
+                                completed_results[tu.id] = result
+                                if result.is_error:
+                                    async for evt in self._process_tool_failure(tu, result):
+                                        yield evt
+                                yield AgentEvent("tool_completed", {"tool_use_id": tu.id, "tool": tu.name, "is_error": result.is_error, "result": result.content, "metadata": result.metadata, "concurrent": True})
+                                if not result.is_error and isinstance(result.metadata.get("planImplementation"), dict):
+                                    plan_handoff = dict(result.metadata["planImplementation"])
+                                self._activate_conditional_skills_for_tool(tu)
+                                # PostToolUse hook
+                                async for evt in self._fire_post_tool_use(tu, result.content):
                                     yield evt
-                            yield AgentEvent("tool_completed", {"tool_use_id": tu.id, "tool": tu.name, "is_error": result.is_error, "result": result.content, "metadata": result.metadata, "concurrent": True})
-                            if not result.is_error and isinstance(result.metadata.get("planImplementation"), dict):
-                                plan_handoff = dict(result.metadata["planImplementation"])
-                            self._activate_conditional_skills_for_tool(tu)
+
+                        for tu in allowed_uses:
+                            result = completed_results.get(tu.id)
+                            if result is None:
+                                result = ToolResult(content=f"Tool {tu.name} produced no result", is_error=True)
                             tool_result_blocks.append(
-                                ToolResultBlock(tool_use_id=tu.id, content=result.content, is_error=result.is_error)
+                                ToolResultBlock(tool_use_id=tu.id, content=result.content, is_error=result.is_error, metadata=result.metadata)
                             )
-                            # PostToolUse hook
-                            async for evt in self._fire_post_tool_use(tu, result.content):
-                                yield evt
                     else:
                         # ── 串行执行 ──
                         for tu in allowed_uses:
@@ -612,7 +699,7 @@ class AgentRuntime:
                                 plan_handoff = dict(result.metadata["planImplementation"])
                             self._activate_conditional_skills_for_tool(tu)
                             tool_result_blocks.append(
-                                ToolResultBlock(tool_use_id=tu.id, content=result.content, is_error=result.is_error)
+                                ToolResultBlock(tool_use_id=tu.id, content=result.content, is_error=result.is_error, metadata=result.metadata)
                             )
                             # PostToolUse hook
                             async for evt in self._fire_post_tool_use(tu, result.content):
@@ -682,6 +769,7 @@ class AgentRuntime:
             self._persist()
 
         except asyncio.CancelledError:
+            self.record_user_cancellation(reason="cancelled", phase="task_cancelled")
             yield AgentEvent("loop_aborted", {"reason": "cancelled"})
             self._persist()
         except TimeoutError as exc:
@@ -748,6 +836,108 @@ class AgentRuntime:
         finally:
             if pending_get and not pending_get.done():
                 pending_get.cancel()
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async def _execute_tools_concurrently_with_progress(self, tool_uses: list[ToolUseBlock], base_context: ToolContext) -> AsyncIterator[AgentEvent | tuple[ToolUseBlock, ToolResult]]:
+        """Execute concurrency-safe tools in parallel while forwarding per-tool progress.
+
+        Each tool receives its own ToolContext metadata containing the matching
+        tool_use_id.  This is especially important for long-running tools such as
+        GenerateVideo: multiple video tasks can now run at the same time while
+        heartbeat/progress events are still routed to the correct UI card.
+        """
+        queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        pending = list(tool_uses)
+        tasks: dict[asyncio.Task[tuple[ToolUseBlock, ToolResult]], tuple[ToolUseBlock, str]] = {}
+        active_by_group: dict[str, int] = {}
+
+        def _context_for(tu: ToolUseBlock) -> ToolContext:
+            async def emit(event: AgentEvent) -> None:
+                data = dict(event.data)
+                data.setdefault("tool_use_id", tu.id)
+                data.setdefault("tool", tu.name)
+                await queue.put(AgentEvent(event.type, data))
+
+            return ToolContext(
+                session_id=base_context.session_id,
+                messages=base_context.messages,
+                metadata={**base_context.metadata, "tool_use_id": tu.id, "tool_name": tu.name},
+                cwd=base_context.cwd,
+                ask_callback=base_context.ask_callback,
+                hook_engine=base_context.hook_engine,
+                event_callback=emit,
+            )
+
+        async def run_tool(tu: ToolUseBlock) -> tuple[ToolUseBlock, ToolResult]:
+            tool = self._tools.get(tu.name)
+            if tool is None:
+                return tu, ToolResult(content=f"Unknown tool: {tu.name}", is_error=True)
+            try:
+                return tu, await tool.call(tu.input, _context_for(tu))
+            except Exception as exc:  # noqa: BLE001 - tool boundary converts to recoverable result
+                from agent_core.recovery.tool_errors import format_tool_exception
+                failure = format_tool_exception(tu, exc)
+                return tu, ToolResult(content=failure.message, is_error=True, metadata=failure.to_metadata())
+
+        def start_ready_tools() -> list[AgentEvent]:
+            started_events: list[AgentEvent] = []
+            idx = 0
+            while idx < len(pending):
+                tu = pending[idx]
+                tool = self._tools.get(tu.name)
+                group = tool_concurrency_group(tool, tu.name)
+                limit = tool_max_concurrency(tool)
+                if limit is not None and active_by_group.get(group, 0) >= limit:
+                    idx += 1
+                    continue
+
+                pending.pop(idx)
+                active_by_group[group] = active_by_group.get(group, 0) + 1
+                task = asyncio.create_task(run_tool(tu), name=f"tool-{tu.name}-{tu.id}")
+                tasks[task] = (tu, group)
+                started_events.append(AgentEvent("tool_started", {"tool_use_id": tu.id, "tool": tu.name, "input": tu.input, "concurrent": True}))
+            return started_events
+
+        pending_get: asyncio.Task[AgentEvent] | None = None
+        try:
+            for event in start_ready_tools():
+                yield event
+            while tasks:
+                if pending_get is None:
+                    pending_get = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait([*tasks.keys(), pending_get], return_when=asyncio.FIRST_COMPLETED)
+
+                if pending_get in done:
+                    yield pending_get.result()
+                    done.remove(pending_get)
+                    pending_get = None
+
+                for task in [task for task in done if task in tasks]:
+                    tu, result = task.result()
+                    _, group = tasks[task]
+                    tasks.pop(task, None)
+                    active_by_group[group] = max(0, active_by_group.get(group, 1) - 1)
+                    yield tu, result
+                    for event in start_ready_tools():
+                        yield event
+
+            if pending_get and not pending_get.done():
+                pending_get.cancel()
+                pending_get = None
+            while not queue.empty():
+                yield queue.get_nowait()
+        finally:
+            if pending_get and not pending_get.done():
+                pending_get.cancel()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     async def _build_system_prompt(self):
         system = await self._context_builder.build()
@@ -908,6 +1098,10 @@ class AgentRuntime:
         """
         iterator = stream.__aiter__()
         timeout = self._config.model_stream_idle_timeout_seconds
+        if timeout <= 0:
+            async for delta in iterator:
+                yield delta
+            return
         while True:
             try:
                 delta = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)

@@ -8,11 +8,13 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from agent_core.attachments import ImageAttachmentStore
 from agent_core.billing.store import BillingStore
 from agent_core.buddy import build_companion_prompt
 from agent_core.context.builder import ContextBuilder, system_prompt_section, uncached_system_prompt_section
 from agent_core.core.agent import AgentRuntime, AgentRuntimeConfig
 from agent_core.hooks.store import HookStore
+from agent_core.images import ImageGenerationClient
 from agent_core.integrations.feishu import FeishuApiTool, FeishuTokenStore
 from agent_core.memory.session_memory import SessionMemoryConfig, SessionMemoryManager
 from agent_core.model.base import ModelClient, ModelResponse
@@ -22,6 +24,7 @@ from agent_core.quota.store import QuotaStore
 from agent_core.skills.store import SkillStore, build_skill_prompt_section
 from agent_core.session.store import create_session_store, SessionStore
 from agent_core.tasks import FileTaskStore, TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool
+from agent_core.teams import AgentTool, ReadInboxTool, SendMessageTool, TeamCreateTool, TeamDeleteTool, TeamListTool, TeamStore
 from agent_core.tools.base import ToolRegistry
 from agent_core.tools.builtin import (
     EchoTool,
@@ -39,13 +42,22 @@ from agent_core.tools.builtin import (
     BashOutputTool,
     KillShellTool,
 )
+from agent_core.tools.creative_kb_search import CreativeKBSearchV3Tool
+from agent_core.tools.image_generation import GenerateImageTool
+from agent_core.tools.image_understanding import UnderstandImageTool
+from agent_core.tools.video_api import VideoApiTool
+from agent_core.tools.video_generation import GenerateVideoTool
 from agent_core.tools.skill import SkillTool
 from agent_core.tools.subagent import TaskTool
 from agent_core.tools.web import WebFetchTool, WebSearchTool
 from agent_core.types import TextBlock, ThinkingBlock, ToolUseBlock
 from agent_core.users.store import UserStore
+from agent_core.videos import VideoGenerationClient
+from agent_core.vision.base import VisionClient
 from agent_core.worktree import WorktreeManager
 from agent_core.plan_mode import plan_mode_system_prompt
+from agent_server.codex_credentials import codex_base_url, codex_image_model, resolve_codex_provider_credentials
+from agent_server.model_providers import create_model_from_env, default_model_for_provider, detect_provider_from_env
 from agent_server.prompt_store import PromptStore
 
 # 自动加载 .env — 从项目根目录（src 的父目录）查找
@@ -54,10 +66,105 @@ _WORKSPACE_ROOT = Path(os.getenv("AGENT_WORKSPACE_ROOT") or os.getcwd()).expandu
 _env_path = _PROJECT_ROOT / ".env"
 load_dotenv(_env_path, override=True)
 _task_store = FileTaskStore(task_list_id="tasklist")
+_team_store = TeamStore()
+
+
+_attachment_store = ImageAttachmentStore(
+    Path(os.getenv("AGENT_ATTACHMENTS_DIR") or Path.home() / ".my-agent-core" / "attachments"),
+    max_size_bytes=int(
+        os.getenv("AGENT_MAX_ATTACHMENT_BYTES")
+        or os.getenv("AGENT_MAX_IMAGE_ATTACHMENT_BYTES")
+        or str(50 * 1024 * 1024)
+    ),
+)
 
 
 def get_task_store() -> FileTaskStore:
     return _task_store
+
+
+def get_team_store() -> TeamStore:
+    return _team_store
+
+
+def get_attachment_store() -> ImageAttachmentStore:
+    return _attachment_store
+
+
+_image_generation_client: ImageGenerationClient | None | object = None
+_video_generation_client: VideoGenerationClient | None | object = None
+
+
+def set_image_generation_client_for_tests(client: ImageGenerationClient | None) -> None:
+    global _image_generation_client
+    _image_generation_client = client
+
+
+def clear_image_generation_client_cache() -> None:
+    global _image_generation_client
+    _image_generation_client = None
+
+
+def clear_video_generation_client_cache() -> None:
+    global _video_generation_client
+    _video_generation_client = None
+
+
+def get_image_generation_client(provider: str | None = None) -> ImageGenerationClient | None:
+    global _image_generation_client
+    if _image_generation_client is not None:
+        return _image_generation_client if _image_generation_client else None  # type: ignore[return-value]
+    selected_provider = provider or _detect_image_provider_from_env()
+    if not selected_provider:
+        _image_generation_client = None
+        return None
+    selected_provider = selected_provider.lower()
+    _image_generation_client = _create_image_generation_client_from_env(selected_provider)
+    return _image_generation_client  # type: ignore[return-value]
+
+
+def get_video_generation_client() -> VideoGenerationClient | None:
+    global _video_generation_client
+    if _video_generation_client is not None:
+        return _video_generation_client if _video_generation_client else None  # type: ignore[return-value]
+    base_url = os.getenv("AGENT_VIDEO_BASE_URL") or os.getenv("VIDEO_BASE_URL")
+    token = os.getenv("AGENT_VIDEO_TOKEN") or os.getenv("VIDEO_BEARER_TOKEN")
+    if not base_url or not token:
+        _video_generation_client = None
+        return None
+    try:
+        from agent_core.videos.rest_bearer import BearerVideoGenerationClient
+        _video_generation_client = BearerVideoGenerationClient(
+            base_url=base_url,
+            token=token,
+            timeout=float(os.getenv("AGENT_VIDEO_TIMEOUT") or "30"),
+            poll_interval=float(os.getenv("AGENT_VIDEO_POLL_INTERVAL") or "10"),
+            max_polls=int(os.getenv("AGENT_VIDEO_MAX_POLLS") or "120"),
+        )
+    except (ImportError, ValueError):
+        _video_generation_client = None
+    return _video_generation_client  # type: ignore[return-value]
+
+
+def _detect_image_provider_from_env() -> str | None:
+    """Resolve image generation provider independently from the chat model.
+
+    Image generation is a tool/playground capability.  It must never change or
+    inherit the main chat provider implicitly, otherwise configuring Codex image
+    credentials can break ordinary conversation.
+    """
+    explicit = (os.getenv("AGENT_IMAGE_PROVIDER") or os.getenv("IMAGE_PROVIDER") or "").strip().lower()
+    if explicit and explicit != "auto":
+        return explicit
+    if os.getenv("TOP_AIDP_BASE_URL") and (os.getenv("TOP_AIDP_APP_KEY") or os.getenv("TOP_APP_KEY")) and (os.getenv("TOP_AIDP_APP_SECRET") or os.getenv("TOP_APP_SECRET")):
+        return "top_aidp"
+    if os.getenv("AGENT_IMAGE_MODEL") or os.getenv("AGENT_IMAGE_BASE_URL") or os.getenv("AGENT_IMAGE_API_KEY"):
+        return "image"
+    if resolve_codex_provider_credentials():
+        return "codex"
+    if os.getenv("OPENAI_IMAGE_MODEL") and os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    return None
 
 
 def create_worktree_manager(*, cwd: str | Path | None = None) -> WorktreeManager:
@@ -69,121 +176,121 @@ def create_worktree_manager(*, cwd: str | Path | None = None) -> WorktreeManager
     return WorktreeManager(cwd=cwd or _WORKSPACE_ROOT, hook_engine=hook_engine)
 
 
-# ── 模型提供商注册表 ──────────────────────────────────────────
-
-_PROVIDERS: dict[str, type[ModelClient]] = {}
-
-
-def register_provider(name: str, cls: type[ModelClient]) -> None:
-    """注册模型提供商。扩展时调用此函数即可。"""
-    _PROVIDERS[name.lower()] = cls
-
-
-def _init_providers() -> None:
-    """延迟注册，避免 import 未安装的 SDK。"""
-    if _PROVIDERS:
-        return
-    try:
-        from agent_core.model.anthropic_adapter import AnthropicMessagesModelClient
-        register_provider("anthropic", AnthropicMessagesModelClient)
-    except ImportError:
-        pass
-    try:
-        from agent_core.model.openai_adapter import OpenAICompatibleModelClient
-        register_provider("openai", OpenAICompatibleModelClient)
-        # 火山方舟 / ARK 也走 OpenAI 兼容协议
-        register_provider("ark", OpenAICompatibleModelClient)
-        register_provider("volcengine", OpenAICompatibleModelClient)
-        register_provider("doubao", OpenAICompatibleModelClient)
-        # DeepSeek 等也兼容
-        register_provider("deepseek", OpenAICompatibleModelClient)
-        # 自定义 OpenAI-compatible 网关
-        register_provider("gateway", OpenAICompatibleModelClient)
-    except ImportError:
-        pass
-
-
 # ── 从环境变量创建 ModelClient ────────────────────────────────
 
 
 def _create_model_from_env(provider: str, *, model_id: str | None = None) -> ModelClient:
     """根据 provider 名称从环境变量创建 ModelClient。"""
-    _init_providers()
-
-    cls = _PROVIDERS.get(provider)
-    if cls is None:
-        available = ", ".join(sorted(_PROVIDERS.keys())) or "none (install anthropic or openai SDK)"
-        raise ValueError(
-            f"Unknown provider '{provider}'. Available: {available}. "
-            f"Set AGENT_MODEL_PROVIDER to one of these."
-        )
-
-    # Anthropic 系列
-    if provider == "anthropic":
-        return cls(
-            model=model_id or os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL_ID") or "claude-3-5-sonnet-latest",
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
-            base_url=os.getenv("ANTHROPIC_BASE_URL"),
-        )
-
-    # OpenAI 兼容系列（openai / ark / volcengine / doubao / deepseek / gateway）
-    if provider in ("openai", "ark", "volcengine", "doubao", "deepseek", "gateway"):
-        if provider == "openai":
-            api_key = os.getenv("OPENAI_API_KEY") or ""
-            base_url = os.getenv("OPENAI_BASE_URL") or None
-            model = model_id or os.getenv("OPENAI_MODEL") or os.getenv("MODEL_ID") or "gpt-4o"
-        elif provider == "deepseek":
-            api_key = os.getenv("DEEPSEEK_API_KEY") or ""
-            base_url = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
-            model = model_id or os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_ID") or "deepseek-chat"
-        elif provider == "gateway":
-            api_key = os.getenv("GATEWAY_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
-            base_url = os.getenv("GATEWAY_BASE_URL") or os.getenv("OPENAI_BASE_URL") or None
-            model = model_id or os.getenv("GATEWAY_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-        else:
-            api_key = os.getenv("ARK_API_KEY") or ""
-            base_url = os.getenv("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
-            model = model_id or os.getenv("ARK_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-        return cls(model=model, api_key=api_key, base_url=base_url)
-
-    # 兜底：尝试通用构造
-    return cls(
-        model=model_id or os.getenv("MODEL_ID") or "unknown",
-        api_key=os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL"),
-    )
+    return create_model_from_env(provider, model_id=model_id)
 
 
 def _model_id_for_provider(provider: str, *, model_id: str | None = None) -> str:
     """Resolve the model id with the same precedence used to create clients."""
-    if model_id:
-        return model_id
-    if provider == "anthropic":
-        return os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL_ID") or "claude-3-5-sonnet-latest"
-    if provider == "openai":
-        return os.getenv("OPENAI_MODEL") or os.getenv("MODEL_ID") or "gpt-4o"
-    if provider == "deepseek":
-        return os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_ID") or "deepseek-chat"
-    if provider == "gateway":
-        return os.getenv("GATEWAY_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-    if provider in ("ark", "volcengine", "doubao"):
-        return os.getenv("ARK_MODEL") or os.getenv("MODEL_ID") or os.getenv("OPENAI_MODEL") or "gpt-4o"
-    if provider in ("fake", "fake_tool", "fake_thinking"):
-        return provider
-    return os.getenv("MODEL_ID") or provider or "unknown"
+    return default_model_for_provider(provider, model_id=model_id)
 
 
 def _detect_provider_from_env() -> str:
-    provider = (os.getenv("AGENT_MODEL_PROVIDER") or "").lower()
-    if provider and provider != "auto":
-        return provider
-    if os.getenv("ARK_API_KEY"):
-        return "ark"
-    if os.getenv("OPENAI_API_KEY"):
-        return "openai"
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return "anthropic"
-    return "fake"
+    return detect_provider_from_env()
+
+
+def _create_vision_client_from_env(provider: str) -> VisionClient | None:
+    """Create a vision client when a vision-capable model is configured."""
+    if provider.startswith("fake"):
+        return None
+    explicit_model = os.getenv("AGENT_VISION_MODEL") or os.getenv("VISION_MODEL")
+    api_key = os.getenv("AGENT_VISION_API_KEY")
+    base_url = os.getenv("AGENT_VISION_BASE_URL")
+    model = explicit_model
+    if provider == "openai":
+        model = model or os.getenv("OPENAI_VISION_MODEL") or os.getenv("OPENAI_MODEL") or os.getenv("MODEL_ID")
+        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        base_url = base_url or os.getenv("OPENAI_BASE_URL")
+    elif provider in ("ark", "volcengine", "doubao"):
+        model = model or os.getenv("ARK_VISION_MODEL") or os.getenv("ARK_MODEL") or os.getenv("MODEL_ID")
+        api_key = api_key or os.getenv("ARK_API_KEY")
+        base_url = base_url or os.getenv("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
+    elif provider == "gateway":
+        model = model or os.getenv("GATEWAY_VISION_MODEL") or os.getenv("GATEWAY_MODEL") or os.getenv("MODEL_ID")
+        api_key = api_key or os.getenv("GATEWAY_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = base_url or os.getenv("GATEWAY_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    elif provider == "codex":
+        codex_credentials = resolve_codex_provider_credentials()
+        model = model or os.getenv("CODEX_VISION_MODEL") or os.getenv("CODEX_MODEL") or os.getenv("MODEL_ID")
+        api_key = api_key or (codex_credentials.api_key if codex_credentials else None) or os.getenv("GATEWAY_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = base_url or codex_base_url()
+    if not model:
+        return None
+    try:
+        from agent_core.vision.openai_compatible import OpenAICompatibleVisionClient
+        return OpenAICompatibleVisionClient(model=model, api_key=api_key or "", base_url=base_url)
+    except ImportError:
+        return None
+
+
+def _create_image_generation_client_from_env(provider: str) -> ImageGenerationClient | None:
+    """Create an image generation/edit client from environment configuration."""
+    if provider in ("top", "top_aidp", "aidp", "cdp", "volc_top"):
+        try:
+            from agent_core.images.top_aidp import TopAidpImageGenerationClient
+            return TopAidpImageGenerationClient(
+                app_key=os.getenv("TOP_AIDP_APP_KEY") or os.getenv("AIDP_APP_KEY") or os.getenv("TOP_APP_KEY") or "",
+                app_secret=os.getenv("TOP_AIDP_APP_SECRET") or os.getenv("AIDP_APP_SECRET") or os.getenv("TOP_APP_SECRET") or "",
+                base_url=os.getenv("TOP_AIDP_BASE_URL") or os.getenv("AIDP_BASE_URL") or os.getenv("TOP_BASE_URL") or "",
+                model=os.getenv("AGENT_IMAGE_MODEL") or os.getenv("TOP_AIDP_MODEL") or os.getenv("AIDP_IMAGE_MODEL") or os.getenv("IMAGE_MODEL") or "",
+                api_version=os.getenv("TOP_AIDP_VERSION") or os.getenv("TOP_API_VERSION") or "2.0",
+                create_method=os.getenv("TOP_AIDP_CREATE_METHOD") or "CreateImageTask",
+                status_method=os.getenv("TOP_AIDP_STATUS_METHOD") or "GetImageTaskStatus",
+                timeout=float(os.getenv("TOP_AIDP_TIMEOUT") or os.getenv("AGENT_IMAGE_TIMEOUT") or "120"),
+                poll_interval=float(os.getenv("TOP_AIDP_POLL_INTERVAL") or "2"),
+                max_polls=int(os.getenv("TOP_AIDP_MAX_POLLS") or "90"),
+                output_url=(os.getenv("TOP_AIDP_RETURN_URL") or "true").strip().lower() not in {"0", "false", "no", "off"},
+                signature_protocol=os.getenv("TOP_AIDP_SIGNATURE_PROTOCOL") or os.getenv("TOP_AIDP_SIGNATURE") or "top",
+                volc_service=os.getenv("TOP_AIDP_VOLC_SERVICE") or "cdp_saas",
+                volc_region=os.getenv("TOP_AIDP_VOLC_REGION") or "cn-beijing",
+                aidp_token=os.getenv("TOP_AIDP_TOKEN") or os.getenv("AIDP_IMAGE_TOKEN") or os.getenv("STORYBOARD_AIDP_IMAGE_TOKEN") or "",
+                session_token=os.getenv("TOP_AIDP_SESSION_TOKEN") or os.getenv("VOLCENGINE_SESSION_TOKEN") or "",
+            )
+        except (ImportError, ValueError):
+            return None
+    model = os.getenv("AGENT_IMAGE_MODEL") or os.getenv("IMAGE_MODEL")
+    api_key = os.getenv("AGENT_IMAGE_API_KEY")
+    base_url = os.getenv("AGENT_IMAGE_BASE_URL")
+    api_mode = (os.getenv("AGENT_IMAGE_API_MODE") or "images").strip().lower()
+    codex_cli = (os.getenv("AGENT_IMAGE_CODEX_CLI") or os.getenv("IMAGE_CODEX_CLI") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if provider == "image":
+        model = model or os.getenv("OPENAI_IMAGE_MODEL") or os.getenv("CODEX_IMAGE_MODEL") or "gpt-image-2"
+        api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("CODEX_API_KEY") or os.getenv("GATEWAY_API_KEY")
+        base_url = base_url or os.getenv("OPENAI_BASE_URL") or os.getenv("CODEX_BASE_URL") or os.getenv("GATEWAY_BASE_URL") or "https://api.openai.com/v1"
+    elif provider == "openai":
+        model = model or os.getenv("OPENAI_IMAGE_MODEL") or "gpt-image-2"
+        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        base_url = base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    elif provider in ("ark", "volcengine", "doubao"):
+        model = model or os.getenv("ARK_IMAGE_MODEL") or os.getenv("ARK_MODEL") or os.getenv("MODEL_ID")
+        api_key = api_key or os.getenv("ARK_API_KEY")
+        base_url = base_url or os.getenv("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
+    elif provider == "gateway":
+        model = model or os.getenv("GATEWAY_IMAGE_MODEL") or os.getenv("GATEWAY_MODEL") or os.getenv("OPENAI_IMAGE_MODEL") or "gpt-image-2"
+        api_key = api_key or os.getenv("GATEWAY_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = base_url or os.getenv("GATEWAY_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    elif provider == "codex":
+        codex_credentials = resolve_codex_provider_credentials()
+        model = model or codex_image_model()
+        api_key = api_key or (codex_credentials.api_key if codex_credentials else None) or os.getenv("GATEWAY_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = base_url or codex_base_url()
+    if not model:
+        return None
+    try:
+        from agent_core.images.openai_compatible import OpenAICompatibleImageGenerationClient
+        return OpenAICompatibleImageGenerationClient(
+            model=model,
+            api_key=api_key or "",
+            base_url=base_url,
+            api_mode=api_mode,
+            codex_cli=codex_cli,
+        )
+    except ImportError:
+        return None
 
 
 def get_session_model_selection(session_id: str | None) -> dict[str, str]:
@@ -200,10 +307,43 @@ def get_session_model_selection(session_id: str | None) -> dict[str, str]:
     model_id = str(metadata.get("model_id") or "").strip()
     if not provider or provider == "auto":
         provider = _detect_provider_from_env()
+    elif provider == "codex" and resolve_codex_provider_credentials() is None:
+        # Older sessions may have been switched to codex by image/Codex login
+        # experiments.  Do not let an image-only or official auth.json login
+        # break the main chat chain.
+        provider = _detect_provider_from_env()
+        model_id = ""
     return {
         "model_provider": provider,
         "model_id": _model_id_for_provider(provider, model_id=model_id or None),
     }
+
+
+def default_prompt_template_name() -> str:
+    return (os.getenv("AGENT_PROMPT_TEMPLATE") or os.getenv("PROMPT_TEMPLATE") or "default").strip() or "default"
+
+
+def get_session_prompt_template(session_id: str | None, *, explicit_template_name: str | None = None) -> str:
+    """Resolve the prompt template for a session.
+
+    Precedence: explicit caller override → session metadata → environment default.
+    """
+    if explicit_template_name:
+        return explicit_template_name.strip() or default_prompt_template_name()
+    metadata: dict[str, Any] = {}
+    if session_id:
+        try:
+            info = _session_store.get_session(session_id)
+            if info and isinstance(info.get("metadata"), dict):
+                metadata = info["metadata"]
+        except Exception:
+            metadata = {}
+    selected = str(metadata.get("prompt_template") or metadata.get("template_name") or "").strip()
+    return selected or default_prompt_template_name()
+
+
+def list_prompt_templates() -> list[dict[str, Any]]:
+    return _prompt_store.list_templates()
 
 
 # ── PromptStore 单例 ──────────────────────────────────────────
@@ -243,7 +383,7 @@ def create_runtime(
     *,
     mode: str | None = None,
     session_id: str | None = None,
-    template_name: str = "default",
+    template_name: str | None = None,
     ask_callback=None,
     user_id: str | None = None,
     org_id: str | None = None,
@@ -255,10 +395,10 @@ def create_runtime(
     1. mode 参数（代码显式指定 provider）
     2. session metadata 中的 model_provider/model_id（由 /model 命令写入）
     3. AGENT_MODEL_PROVIDER 环境变量
-    4. 自动检测：有 ARK_API_KEY → ark，有 ANTHROPIC_API_KEY → anthropic，否则 → fake
+    4. ProviderSpec 自动检测：codex → ark → openai → anthropic → deepseek → gateway → fake
 
     fake / fake_tool 模式不需要任何 API Key，用于调试。
-    template_name: Prompt 模板名称（对应 prompts/ 目录下的 YAML 文件）
+    template_name: Prompt 模板名称（对应 prompts/ 目录下的 YAML 文件）；不传时读取 session metadata / 环境变量。
     """
     effective_session_id = session_id or os.getenv("AGENT_SESSION_ID") or f"debug-{uuid.uuid4()}"
     effective_cwd = Path(cwd or _WORKSPACE_ROOT).expanduser().resolve()
@@ -287,6 +427,7 @@ def create_runtime(
                 metadata={"user_id": effective_user_id, "org_id": effective_org_id},
             )
     selection = get_session_model_selection(effective_session_id)
+    effective_template_name = get_session_prompt_template(effective_session_id, explicit_template_name=template_name)
     provider = (mode or selection["model_provider"] or "").lower()
     if not provider or provider == "auto":
         provider = _detect_provider_from_env()
@@ -306,7 +447,7 @@ def create_runtime(
     # ── 使用 PromptStore 创建 ContextBuilder ──
     try:
         context_builder = _prompt_store.create_context_builder(
-            template_name,
+            effective_template_name,
             session_id=effective_session_id,
             cwd=effective_cwd,
         )
@@ -336,6 +477,12 @@ def create_runtime(
         uncached_system_prompt_section(
             "plan-mode",
             lambda: plan_mode_system_prompt(effective_session_id, cwd=effective_cwd),
+        )
+    )
+    context_builder.dynamic_sections.append(
+        uncached_system_prompt_section(
+            "agent-team",
+            lambda: _team_store.render_context(session_id=effective_session_id, user_id=effective_user_id),
         )
     )
 
@@ -377,10 +524,12 @@ def create_runtime(
     else:
         model = _create_model_from_env(provider, model_id=effective_model_id)
 
+    vision_client = _create_vision_client_from_env(provider)
+
     def create_permission_policy() -> StaticPermissionPolicy:
         return StaticPermissionPolicy(
-            allow={"echo", "TodoWrite", "Task", "Skill", "read_text_file", "list_directory", "grep", "glob", "bash_output"},
-            ask={"write_text_file", "edit_file", "bash", "kill_shell", "FeishuApi"},
+            allow={"echo", "TodoWrite", "Task", "Skill", "read_text_file", "list_directory", "grep", "glob", "bash_output", "UnderstandImage", "GenerateImage", "GenerateVideo", "VideoApi", "CreativeKBSearchV3", "TeamList", "ReadInbox", "SendMessage"},
+            ask={"write_text_file", "edit_file", "bash", "kill_shell", "FeishuApi", "Agent", "TeamCreate", "TeamDelete"},
             session_id=effective_session_id,
             cwd=effective_cwd,
         )
@@ -388,7 +537,7 @@ def create_runtime(
     def create_sub_context_builder(child_session_id: str, subagent_type: str | None = None) -> ContextBuilder:
         try:
             builder = _prompt_store.create_context_builder(
-                template_name,
+                effective_template_name,
                 session_id=child_session_id,
                 cwd=effective_cwd,
             )
@@ -429,6 +578,13 @@ def create_runtime(
             WebFetchTool(),
             WebSearchTool(),
             FeishuApiTool(_feishu_token_store),
+            UnderstandImageTool(_attachment_store, vision_client),
+            GenerateImageTool(_attachment_store, get_image_generation_client),
+            GenerateVideoTool(_attachment_store, get_video_generation_client),
+            VideoApiTool(get_video_generation_client),
+            CreativeKBSearchV3Tool(),
+            SendMessageTool(_team_store),
+            ReadInboxTool(_team_store),
             BashTool(),
             BashOutputTool(),
             KillShellTool(),
@@ -445,6 +601,9 @@ def create_runtime(
         TaskUpdateTool(_task_store),
         TaskListTool(_task_store),
         TaskGetTool(_task_store),
+        TeamCreateTool(_team_store),
+        TeamListTool(_team_store),
+        TeamDeleteTool(_team_store),
         SkillTool(
             runtime_skill_store,
             model=model,
@@ -458,6 +617,16 @@ def create_runtime(
             context_builder_factory=create_sub_context_builder,
             permission_policy_factory=create_permission_policy,
         ),
+        AgentTool(
+            team_store=_team_store,
+            model=model,
+            sub_tools_factory=create_sub_tools,
+            context_builder_factory=create_sub_context_builder,
+            permission_policy_factory=create_permission_policy,
+            session_store=_session_store,
+        ),
+        SendMessageTool(_team_store),
+        ReadInboxTool(_team_store),
         ReadTextFileTool(),
         WriteTextFileTool(),
         EditFileTool(),
@@ -467,6 +636,11 @@ def create_runtime(
         WebFetchTool(),
         WebSearchTool(),
         FeishuApiTool(_feishu_token_store),
+        UnderstandImageTool(_attachment_store, vision_client),
+        GenerateImageTool(_attachment_store, get_image_generation_client),
+        GenerateVideoTool(_attachment_store, get_video_generation_client),
+        VideoApiTool(get_video_generation_client),
+        CreativeKBSearchV3Tool(),
         BashTool(),
         BashOutputTool(),
         KillShellTool(),
@@ -490,6 +664,7 @@ def create_runtime(
             "account_uuid": user_context["user"].get("account_uuid"),
             "organization_uuid": user_context["organization"].get("organization_uuid"),
             "cwd": str(effective_cwd),
+            "prompt_template": effective_template_name,
         },
         cwd=str(effective_cwd),
     )

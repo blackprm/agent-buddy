@@ -39,6 +39,8 @@ class Tool(Protocol):
     description: str
     input_schema: dict[str, Any]
     is_concurrency_safe: bool
+    concurrency_group: str
+    max_concurrency: int | None
     should_defer: bool
 
     async def call(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -185,3 +187,24 @@ async def execute_tools_serially(
             failure = format_tool_exception(tool_use, exc)
             results.append((tool_use, ToolResult(content=failure.message, is_error=True, metadata=failure.to_metadata())))
     return results
+
+
+def tool_concurrency_group(tool: Tool | None, fallback_name: str = "") -> str:
+    """Return the resource bucket used for per-tool concurrency limits."""
+    raw = getattr(tool, "concurrency_group", "") if tool is not None else ""
+    group = str(raw or "").strip()
+    if group:
+        return group
+    return str(getattr(tool, "name", "") or fallback_name or "tool")
+
+
+def tool_max_concurrency(tool: Tool | None) -> int | None:
+    """Return a positive per-group concurrency limit, or None for unlimited."""
+    raw = getattr(tool, "max_concurrency", None) if tool is not None else None
+    if raw in (None, "", 0):
+        return None
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return limit if limit > 0 else None

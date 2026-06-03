@@ -4,6 +4,7 @@ from typing import Any
 import re
 import uuid
 
+from agent_core.recovery.tool_errors import format_exception_detail
 from agent_core.skills.store import SkillStore
 from agent_core.tools.base import ToolContext, ToolResult
 
@@ -55,9 +56,9 @@ class SkillTool:
             content = self._store.render_skill(name, str(args or ""), session_id=context.session_id)
             content = await self._execute_prompt_shell(content, context, skill.allowed_tools, skill.shell)
         except FileNotFoundError as exc:
-            return ToolResult(content=str(exc), is_error=True)
+            return ToolResult(content=f"Skill {name} failed while rendering:\n{format_exception_detail(exc)}", is_error=True)
         except Exception as exc:
-            return ToolResult(content=f"Skill {name} failed while rendering: {exc}", is_error=True)
+            return ToolResult(content=f"Skill {name} failed while rendering:\n{format_exception_detail(exc)}", is_error=True)
 
         if skill.execution_context == "fork" and self._model and self._tools_factory and self._context_builder_factory:
             return await self._run_forked_skill(skill, content, context, str(args or ""))

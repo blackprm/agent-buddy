@@ -23,6 +23,7 @@ class SessionAgentTask:
     session_id: str
     runtime: AgentRuntime
     message: str
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     abort_event: asyncio.Event = field(default_factory=asyncio.Event)
     events: Deque[tuple[int, AgentEvent | None]] = field(default_factory=lambda: deque(maxlen=2000))
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
@@ -70,6 +71,7 @@ class AgentTaskManager:
         session_id: str,
         runtime: AgentRuntime,
         message: str,
+        attachments: list[dict[str, Any]] | None = None,
         workspace_manager: Any | None = None,
         workspace: Any | None = None,
         task_store: Any | None = None,
@@ -84,6 +86,7 @@ class AgentTaskManager:
                 session_id=session_id,
                 runtime=runtime,
                 message=message,
+                attachments=list(attachments or []),
                 workspace_manager=workspace_manager,
                 workspace=workspace,
                 task_store=task_store,
@@ -145,10 +148,16 @@ class AgentTaskManager:
         if not task or task.done:
             return False
         task.abort_event.set()
+        record_cancel = getattr(task.runtime, "record_user_cancellation", None)
+        if callable(record_cancel):
+            with contextlib.suppress(Exception):
+                record_cancel(reason="external_abort", phase="task_manager_abort")
         task.pending_permission_request = None
         task.pending_permission_response = None
         if task.permission_future and not task.permission_future.done():
             task.permission_future.set_result({"decision": "deny", "option": {"type": "reject"}})
+        if task.task and not task.task.done():
+            task.task.cancel()
         return True
 
     async def events_after(self, session_id: str, after_seq: int) -> tuple[list[tuple[int, AgentEvent | None]], int, bool]:
@@ -176,11 +185,18 @@ class AgentTaskManager:
                     "path": getattr(managed.workspace, "worktree_path", ""),
                     "task_id": managed.task_id,
                 }))
-            async for event in managed.runtime.run(managed.message, abort_event=managed.abort_event):
+            run_kwargs: dict[str, Any] = {"abort_event": managed.abort_event}
+            if managed.attachments:
+                run_kwargs["attachments"] = managed.attachments
+            async for event in managed.runtime.run(managed.message, **run_kwargs):
                 if event.type in ("loop_completed", "loop_failed", "loop_aborted"):
                     managed.terminal_sent = True
                 await managed.append_event(event)
         except asyncio.CancelledError:
+            record_cancel = getattr(managed.runtime, "record_user_cancellation", None)
+            if callable(record_cancel):
+                with contextlib.suppress(Exception):
+                    record_cancel(reason="cancelled", phase="task_manager_cancelled")
             await managed.append_event(AgentEvent("loop_aborted", {"reason": "cancelled"}))
             managed.terminal_sent = True
         except Exception as exc:  # noqa: BLE001 - server boundary converts to event

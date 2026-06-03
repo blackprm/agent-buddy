@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from agent_core.billing.store import BillingStore
 from agent_core.context.compact import AutoCompactConfig
+from agent_core.core.agent import AgentRuntimeConfig
 from agent_core.memory.session_memory import SessionMemoryConfig, SessionMemoryManager
 from agent_core.permissions.policy import USER_PERMISSION_MODE_CHOICES, get_session_permission_state, permission_mode_title
 from agent_core.quota.store import QuotaStore
@@ -25,7 +26,10 @@ from agent_core.session.store import create_session_store, serialize_message, de
 from agent_core.users.store import UserStore
 from agent_core.hooks.store import HookStore
 from agent_core.hooks.types import HookEvent
-from agent_server.prompt_store import PromptStore, clear_system_prompt_cache
+from agent_server.codex_credentials import codex_credential_source, codex_login_status, delete_codex_credentials, save_codex_credentials, start_codex_login_flow
+from agent_server.model_providers import configured_provider_names, env_model_selection
+from agent_server.prompt_store import PromptStore, SOUL_DESIGN_PRINCIPLES, clear_system_prompt_cache
+from agent_server.runtime_factory import clear_image_generation_client_cache
 
 _ADMIN_COOKIE_NAME = "my_agent_admin_token"
 _GENERATED_ADMIN_TOKEN = secrets.token_urlsafe(32)
@@ -165,6 +169,7 @@ class TemplateUpsertRequest(BaseModel):
     metadata: TemplateMetadata
     product_name: str = "MyAgent"
     base_instructions: str = ""
+    design_principles: list[dict[str, Any]] = []
     sections: list[dict[str, str]] = []
     dynamic_sections: list[dict[str, Any]] = []
     context: dict[str, Any] = {}
@@ -233,6 +238,19 @@ class QuotaPolicyRequest(BaseModel):
     max_cost_per_month: float = 0.0
     enabled: bool = True
     metadata: dict[str, Any] = {}
+
+
+class CodexCredentialsRequest(BaseModel):
+    secret: str
+    credential_type: str = "api_key"
+    base_url: str = "http://localhost:8080/v1"
+    model: str = "gpt-5.4"
+    image_model: str = "gpt-image-2"
+    metadata: dict[str, Any] = {}
+
+
+class CodexLoginRequest(BaseModel):
+    flow: str = "browser"
 
 
 class SkillCreateRequest(BaseModel):
@@ -383,6 +401,12 @@ async def get_prompt(name: str, raw: bool = False) -> Any:
         return store.get_template(name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+
+
+@router.get("/prompt-design-principles/default")
+async def default_prompt_design_principles() -> dict[str, Any]:
+    """返回内置 SOUL 风格设计原则，供 Admin UI 一键写入模板。"""
+    return {"source": "openclaw/docs/reference/templates/SOUL.md", "principles": SOUL_DESIGN_PRINCIPLES}
 
 
 @router.post("/prompts")
@@ -847,34 +871,19 @@ async def preview_model(model_id: str) -> dict[str, str]:
 @router.get("/config")
 async def get_config() -> dict[str, Any]:
     """获取当前运行时配置。"""
-    provider = os.getenv("AGENT_MODEL_PROVIDER", "auto")
-    if not provider or provider == "auto":
-        if os.getenv("ARK_API_KEY"):
-            provider = "ark"
-        elif os.getenv("OPENAI_API_KEY"):
-            provider = "openai"
-        elif os.getenv("ANTHROPIC_API_KEY"):
-            provider = "anthropic"
-        else:
-            provider = "fake"
-
-    available = set()
-    if os.getenv("ARK_API_KEY"):
-        available.add("ark")
-    if os.getenv("OPENAI_API_KEY"):
-        available.add("openai")
-    if os.getenv("ANTHROPIC_API_KEY"):
-        available.add("anthropic")
-    if not available:
-        available.add("fake")
+    selection = env_model_selection()
+    available = configured_provider_names()
 
     compact_cfg = AutoCompactConfig()
+    runtime_cfg = AgentRuntimeConfig()
     user_ctx = get_user_store().get_user_context()
 
     return {
-        "model_provider": provider,
-        "model_id": os.getenv("MODEL_ID", "default"),
+        "model_provider": selection["model_provider"],
+        "model_id": selection["model_id"],
+        "codex_credentials": codex_credential_source(),
         "session_id": os.getenv("AGENT_SESSION_ID", "debug-session"),
+        "model_stream_idle_timeout_seconds": runtime_cfg.model_stream_idle_timeout_seconds,
         "available_providers": sorted(available),
         "hook_events": [e.value for e in HookEvent],
         "session_memory": asdict(SessionMemoryConfig.from_env()),
@@ -885,6 +894,7 @@ async def get_config() -> dict[str, Any]:
             "auto_compact_threshold": compact_cfg.auto_compact_threshold,
             "buffer_tokens": compact_cfg.buffer_tokens,
             "max_consecutive_failures": compact_cfg.max_consecutive_failures,
+            "stream_idle_timeout_seconds": compact_cfg.compact_stream_idle_timeout_seconds,
             "enable_micro": compact_cfg.enable_micro,
             "enable_full": compact_cfg.enable_full,
         },
@@ -904,6 +914,51 @@ async def get_config() -> dict[str, Any]:
         "usage": get_billing_store().usage_summary(user_id=user_ctx["user"]["id"]),
         "sandbox": get_sandbox_manager().status(),
     }
+
+
+@router.get("/integrations/codex")
+async def get_codex_status() -> dict[str, Any]:
+    return codex_credential_source()
+
+
+@router.put("/integrations/codex")
+async def put_codex_credentials(request: CodexCredentialsRequest) -> dict[str, Any]:
+    credential_type = str(request.credential_type or "api_key").strip().lower()
+    if credential_type not in {"api_key", "access_token", "auth_json"}:
+        raise HTTPException(status_code=400, detail="credential_type must be api_key, access_token, or auth_json")
+    try:
+        credentials = save_codex_credentials(
+            secret=request.secret,
+            credential_type=credential_type,
+            base_url=request.base_url,
+            model=request.model,
+            image_model=request.image_model,
+            metadata={**request.metadata, "source": request.metadata.get("source") or "admin-ui"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    clear_image_generation_client_cache()
+    return {"codex": codex_credential_source(), "source": credentials.source, "auth_mode": credentials.auth_mode}
+
+
+@router.delete("/integrations/codex")
+async def delete_codex_integration() -> dict[str, Any]:
+    deleted = delete_codex_credentials()
+    clear_image_generation_client_cache()
+    return {"deleted": deleted, "codex": codex_credential_source()}
+
+
+@router.post("/integrations/codex/login")
+async def post_codex_login(request: CodexLoginRequest) -> dict[str, Any]:
+    try:
+        return start_codex_login_flow(flow=request.flow)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/integrations/codex/login")
+async def get_codex_login() -> dict[str, Any]:
+    return codex_login_status()
 
 
 @router.get("/sandbox")

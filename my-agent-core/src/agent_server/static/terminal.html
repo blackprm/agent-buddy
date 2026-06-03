@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyAgent Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css" />
     <style>
       :root {
         --bg: #11100d;
@@ -22,6 +23,8 @@
         --red: #ff6b5f;
         --blue: #7fb4ff;
         --mono: 'JetBrains Mono', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+        --plyr-color-main: #f0bf6a;
+        --plyr-video-background: rgba(0,0,0,.28);
       }
       *, *::before, *::after { box-sizing: border-box; margin: 0; }
       html, body { height: 100%; }
@@ -162,6 +165,30 @@
       .session-item:hover .session-delete { opacity: 1; }
       .session-delete:hover { color: var(--red); }
 
+      .ctx-menu {
+        position: fixed;
+        z-index: 9999;
+        min-width: 140px;
+        background: rgba(28, 25, 20, 0.96);
+        border: 1px solid rgba(230,197,150,0.18);
+        border-radius: 8px;
+        padding: 4px 0;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        backdrop-filter: blur(12px);
+        display: none;
+      }
+      .ctx-menu.show { display: block; }
+      .ctx-menu-item {
+        padding: 7px 14px;
+        font-size: 12px;
+        color: var(--text);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .ctx-menu-item:hover { background: rgba(255,154,95,0.12); }
+      .ctx-menu-item.danger { color: var(--red); }
+      .ctx-menu-item.danger:hover { background: rgba(255,107,95,0.12); }
+
       .session-list::-webkit-scrollbar { width: 3px; }
       .session-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); }
 
@@ -215,12 +242,91 @@
       }
       @keyframes pillScan { 0%, 35% { transform: translateX(-120%); } 70%, 100% { transform: translateX(120%); } }
 
+      .runtime-status {
+        position: relative;
+        z-index: 2;
+        margin: 0;
+        padding: 6px 16px;
+        border-top: 1px solid rgba(255,255,255,0.06);
+        background: rgba(17, 16, 13, 0.85);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        height: 32px;
+        overflow-x: auto;
+        flex-shrink: 0;
+        scrollbar-width: none;
+      }
+      .runtime-status::-webkit-scrollbar { display: none; }
+      .runtime-status.warn { background: rgba(31, 21, 11, .85); }
+      .runtime-status.error { background: rgba(45, 12, 10, .75); }
+      .status-led {
+        width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+        background: var(--green);
+        box-shadow: 0 0 6px rgba(122,214,109,.6);
+      }
+      .runtime-status.warn .status-led { background: var(--gold); box-shadow: 0 0 6px rgba(240,191,106,.6); }
+      .runtime-status.error .status-led { background: var(--red); box-shadow: 0 0 6px rgba(255,107,95,.6); }
+      .status-chip {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 30vw;
+        padding: 0;
+        border: none;
+        border-radius: 0;
+        background: none;
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .status-chip.primary { border: none; background: none; }
+      .status-chip .k { color: var(--faint); font-size: 10px; letter-spacing: .04em; text-transform: none; }
+      .status-chip .v { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      .status-chip .k::after { content: ':'; }
+      .prompt-template-select {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 11px;
+        max-width: 120px;
+        outline: none;
+        cursor: pointer;
+      }
+      .prompt-template-select option { background: #17120d; color: #f3e7d5; }
+      .status-chip.good .v { color: var(--green); }
+      .status-chip.warn .v { color: var(--gold); }
+      .status-chip.bad .v { color: var(--red); }
+      .status-chip.subtle .v { color: var(--faint); }
+      .status-refresh {
+        flex: 0 0 auto;
+        margin-left: auto;
+        border: none;
+        border-radius: 3px;
+        color: var(--faint);
+        background: none;
+        padding: 2px 6px;
+        cursor: pointer;
+        font-size: 10px;
+      }
+      .status-refresh:hover { color: var(--muted); background: rgba(255,255,255,.05); }
+      @media (max-width: 980px) {
+        .status-chip { max-width: 48vw; }
+        .status-chip.optional { display: none; }
+      }
+
       .term-output {
         flex: 1; overflow-y: auto; padding: 18px 26px 18px 24px;
         position: relative;
         z-index: 1;
       }
 
+      .term-output, .term-line, .md-message, .md-block, .command-body, .bash-stdout, .bash-stderr, .tool-detail {
+        user-select: text;
+        -webkit-user-select: text;
+      }
       .term-line { white-space: pre-wrap; word-break: break-word; }
 
       /* 提示符 */
@@ -392,6 +498,40 @@
         line-height: 1.6;
         color: var(--text);
       }
+      .md-message {
+        position: relative;
+        margin: 4px 0 8px;
+        padding-right: 34px;
+      }
+      .md-message .md-block { margin: 0; }
+      .message-copy-btn {
+        position: absolute;
+        top: 1px;
+        right: 0;
+        width: 26px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(230,197,150,0.12);
+        border-radius: 7px;
+        background: rgba(255,255,255,0.025);
+        color: var(--faint);
+        cursor: pointer;
+        font-size: 12px;
+        line-height: 1;
+        opacity: 0;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .md-message:hover .message-copy-btn,
+      .message-copy-btn:focus-visible {
+        opacity: 1;
+      }
+      .message-copy-btn:hover {
+        color: var(--gold);
+        border-color: rgba(240,191,106,0.34);
+        background: rgba(240,191,106,0.08);
+      }
       .md-block h1, .md-block h2, .md-block h3 {
         color: #fff1df; margin: 12px 0 4px; font-weight: 750;
       }
@@ -469,6 +609,153 @@
       }
       .input-line input::placeholder {
         color: #3f3f46;
+      }
+      .input-action {
+        width: 26px; height: 26px; display: grid; place-items: center;
+        margin-left: 8px; border: 1px solid rgba(255,154,95,0.18);
+        border-radius: 8px; background: rgba(255,255,255,0.035);
+        color: var(--muted); cursor: pointer; flex-shrink: 0;
+      }
+      .input-action:hover { color: var(--gold); border-color: rgba(240,191,106,0.34); }
+      .input-action.uploading { opacity: .55; cursor: wait; }
+      .attachment-preview {
+        display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 7px 0;
+      }
+      .attachment-chip {
+        display: flex; align-items: center; gap: 7px; max-width: 220px;
+        border: 1px solid rgba(255,154,95,0.18); border-radius: 10px;
+        background: rgba(0,0,0,0.20); padding: 5px 7px;
+      }
+      .attachment-chip img, .attachment-chip video, .attachment-media-icon { width: 34px; height: 34px; border-radius: 7px; object-fit: cover; background: rgba(255,255,255,0.04); }
+      .attachment-chip img, .attachment-chip video { cursor: zoom-in; transition: transform .16s ease, box-shadow .16s ease; }
+      .attachment-chip img:hover, .attachment-chip video:hover { transform: scale(1.04); box-shadow: 0 0 0 1px rgba(240,191,106,.34), 0 8px 24px rgba(0,0,0,.26); }
+      .attachment-media-icon { display: grid; place-items: center; color: var(--gold); font-size: 16px; }
+      .attachment-name { color: var(--text); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .attachment-meta { color: var(--faint); font-size: 10px; }
+      .attachment-remove { border: 0; background: transparent; color: var(--faint); cursor: pointer; padding: 2px; }
+      .attachment-remove:hover { color: var(--red); }
+      .input-row.drag-over .input-line { border-color: rgba(127,180,255,0.52); background: rgba(127,180,255,0.08); }
+      .upload-hint { color: var(--faint); font-size: 11px; margin: 5px 0 0 10px; }
+      .image-playground-modal {
+        position: fixed; inset: 0; z-index: 95; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.58); backdrop-filter: blur(6px);
+      }
+      .image-playground-modal.open { display: flex; }
+      .image-playground-panel {
+        width: min(760px, calc(100vw - 28px)); max-height: calc(100vh - 38px); overflow: auto;
+        border: 1px solid rgba(255,154,95,0.22); border-radius: 16px;
+        background: linear-gradient(135deg, rgba(24,20,16,0.98), rgba(10,10,12,0.98));
+        box-shadow: 0 28px 80px rgba(0,0,0,0.62); padding: 18px;
+      }
+      .image-playground-head { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom: 14px; }
+      .image-playground-title { color: var(--gold); font-weight: 700; letter-spacing: -0.02em; }
+      .image-playground-close { border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:20px; }
+      .image-playground-grid { display:grid; grid-template-columns: 1fr 160px 120px 90px; gap: 10px; align-items:end; }
+      .image-playground-field { display:flex; flex-direction:column; gap:5px; color:var(--muted); font-size:11px; }
+      .image-playground-field textarea, .image-playground-field select, .image-playground-field input {
+        border: 1px solid rgba(255,154,95,0.18); border-radius: 9px; background: rgba(0,0,0,0.25);
+        color: var(--text); padding: 8px; font-family: inherit;
+      }
+      .image-playground-field textarea { min-height: 92px; resize: vertical; grid-column: 1 / -1; }
+      .image-playground-actions { display:flex; gap:8px; justify-content:flex-end; margin-top: 12px; }
+      .image-playground-actions button {
+        border: 1px solid rgba(240,191,106,0.26); border-radius: 9px; background: rgba(255,255,255,0.04);
+        color: var(--gold); padding: 8px 12px; cursor:pointer; font-family: inherit;
+      }
+      .image-playground-actions button:disabled { opacity:.55; cursor:wait; }
+      .image-playground-note { color: var(--faint); font-size: 11px; margin-top: 8px; line-height: 1.35; }
+      .image-playground-results { display:grid; grid-template-columns: repeat(auto-fill, minmax(142px, 1fr)); gap:12px; margin-top: 14px; }
+      .image-playground-result {
+        position: relative; overflow: hidden;
+        border:1px solid rgba(255,154,95,0.18); border-radius:14px; padding:8px;
+        background:linear-gradient(180deg, rgba(255,255,255,0.045), rgba(0,0,0,0.24));
+        box-shadow: 0 16px 38px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.04);
+      }
+      .image-playground-result::before { content:''; position:absolute; inset:0; pointer-events:none; background: radial-gradient(circle at 18% 10%, rgba(240,191,106,.18), transparent 34%); opacity:.75; }
+      .image-playground-result img { position:relative; width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px; display:block; cursor:zoom-in; background:#090806; }
+      .image-playground-result .image-result-meta { position:relative; color:var(--faint); font-size:10px; margin-top:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .image-result-actions { position:relative; display:flex; gap:6px; margin-top:7px; }
+      .image-mini-action {
+        flex:1; min-width:0; border:1px solid rgba(240,191,106,.20); border-radius:8px;
+        background:rgba(0,0,0,.22); color:#eacb93; padding:5px 6px; cursor:pointer;
+        font-size:10px; font-family:inherit; text-align:center; text-decoration:none; transition: transform .14s ease, border-color .14s ease, background .14s ease;
+      }
+      .image-mini-action:hover { transform:translateY(-1px); border-color:rgba(255,154,95,.42); background:rgba(255,154,95,.10); color:#ffe0b9; }
+
+      .image-gallery { margin-top: 10px; display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 420px)); gap: 12px; align-items:start; }
+      .image-gallery-card {
+        position:relative; overflow:hidden; border-radius:16px; padding:8px;
+        border:1px solid rgba(240,191,106,.18);
+        background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(0,0,0,.28));
+        box-shadow: 0 18px 48px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.045);
+      }
+      .image-gallery-card.video-card { border-color: rgba(127,180,255,.26); background: linear-gradient(145deg, rgba(127,180,255,.08), rgba(0,0,0,.31)); }
+      .image-gallery-card.audio-card { border-color: rgba(154,209,255,.24); background: linear-gradient(145deg, rgba(154,209,255,.06), rgba(0,0,0,.31)); }
+      .image-gallery-card::after { content:''; position:absolute; inset:auto 10px 10px 10px; height:42%; pointer-events:none; border-radius:14px; background:linear-gradient(180deg, transparent, rgba(0,0,0,.42)); opacity:.7; }
+      .image-gallery-card img, .image-gallery-card video { position:relative; z-index:1; width:100%; max-height:360px; object-fit:contain; display:block; border-radius:12px; background:#070604; }
+      .image-gallery-card img { height:auto; }
+      .image-gallery-card audio { position:relative; z-index:1; width:100%; margin-top:34px; display:block; }
+      .image-gallery-card.video-card video { aspect-ratio:auto; }
+      .image-gallery-card .plyr { position:relative; z-index:1; width:100%; max-height:360px; border-radius:12px; overflow:hidden; --plyr-control-radius: 9px; --plyr-video-controls-background: linear-gradient(180deg, transparent, rgba(0,0,0,.72)); }
+      .image-gallery-card .plyr__video-wrapper { background:#070604; }
+      .image-gallery-card .plyr video { object-fit:contain; }
+      .media-kind-pill { position:absolute; top:14px; left:14px; z-index:3; border:1px solid rgba(255,255,255,.16); border-radius:999px; padding:3px 7px; color:#f7d9a5; background:rgba(0,0,0,.42); backdrop-filter:blur(8px); font-size:9px; font-weight:800; letter-spacing:.13em; text-transform:uppercase; }
+      .image-gallery-card img { cursor:zoom-in; }
+      .image-gallery-card video { cursor:pointer; }
+      .image-gallery-caption { position:relative; z-index:2; margin-top:7px; color:var(--muted); font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .image-gallery-actions { position:relative; z-index:2; display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:6px; margin-top:7px; }
+
+      .image-lightbox {
+        position:fixed; inset:0; z-index:130; display:none; align-items:center; justify-content:center;
+        padding:28px; background:rgba(5,4,3,.78); backdrop-filter: blur(16px) saturate(1.15);
+      }
+      .image-lightbox.open { display:flex; animation: lightbox-fade .16s ease-out; }
+      @keyframes lightbox-fade { from { opacity:0; } to { opacity:1; } }
+      .image-lightbox-shell {
+        width:min(1180px, 100%); max-height:calc(100vh - 56px); display:grid; grid-template-columns:minmax(0, 1fr) 280px; gap:16px;
+        border:1px solid rgba(240,191,106,.22); border-radius:24px; padding:14px;
+        background:linear-gradient(135deg, rgba(26,21,16,.94), rgba(8,7,6,.96));
+        box-shadow: 0 42px 120px rgba(0,0,0,.68), inset 0 1px 0 rgba(255,255,255,.055);
+      }
+      .image-lightbox.video-open { padding:8px; background:rgba(0,0,0,.9); }
+      .image-lightbox.video-open .image-lightbox-shell {
+        width:calc(100vw - 16px); height:calc(100vh - 16px); max-height:none;
+        display:grid; grid-template-columns:1fr; gap:0; padding:8px; border-radius:18px;
+      }
+      .image-lightbox-stage { min-height:0; display:grid; place-items:center; overflow:auto; border-radius:18px; background: radial-gradient(circle at 50% 0%, rgba(240,191,106,.12), transparent 42%), rgba(0,0,0,.26); }
+      .image-lightbox-stage img, .image-lightbox-stage video { max-width:100%; max-height:calc(100vh - 104px); object-fit:contain; border-radius:14px; box-shadow:0 22px 80px rgba(0,0,0,.45); }
+      .image-lightbox-stage video { width:min(100%, 980px); background:#000; }
+      .image-lightbox-stage .plyr { width:min(100%, 980px); border-radius:14px; overflow:hidden; box-shadow:0 22px 80px rgba(0,0,0,.45); }
+      .image-lightbox.video-open .image-lightbox-stage { width:100%; height:100%; overflow:hidden; }
+      .image-lightbox.video-open .image-lightbox-stage video,
+      .image-lightbox.video-open .image-lightbox-stage .plyr,
+      .image-lightbox.video-open .image-lightbox-stage .plyr--video,
+      .image-lightbox.video-open .image-lightbox-stage .lightbox-video-player {
+        width:100%; max-width:100%; height:100%; max-height:100%;
+      }
+      .image-lightbox.video-open .image-lightbox-stage .plyr__video-wrapper,
+      .image-lightbox.video-open .image-lightbox-stage .plyr__poster { width:100%; height:100%; }
+      .image-lightbox.video-open .image-lightbox-stage video { width:100%; height:100%; object-fit:contain; }
+      .image-lightbox.video-open .image-lightbox-side { display:none; }
+      .image-lightbox-side { display:flex; flex-direction:column; gap:10px; min-width:0; }
+      .image-lightbox-kicker { color:var(--gold); font-size:10px; text-transform:uppercase; letter-spacing:.18em; }
+      .image-lightbox-title { color:var(--text); font-weight:800; font-size:14px; word-break:break-all; }
+      .image-lightbox-meta { color:var(--faint); font-size:11px; line-height:1.45; word-break:break-all; }
+      .image-lightbox-actions { display:grid; gap:8px; margin-top:auto; }
+      .image-lightbox-actions button, .image-lightbox-actions a {
+        text-align:center; text-decoration:none; border:1px solid rgba(240,191,106,.24); border-radius:11px;
+        background:rgba(255,255,255,.045); color:#f6d39b; padding:9px 10px; cursor:pointer; font-family:inherit; font-size:12px;
+      }
+      .image-lightbox-actions button:hover, .image-lightbox-actions a:hover { border-color:rgba(255,154,95,.48); background:rgba(255,154,95,.10); }
+      .image-lightbox-close { position:absolute; top:18px; right:20px; width:34px; height:34px; border-radius:999px; border:1px solid rgba(240,191,106,.24); background:rgba(0,0,0,.38); color:var(--gold); cursor:pointer; font-size:20px; }
+      .image-toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(18px); z-index:150; opacity:0; pointer-events:none; color:#14100b; background:linear-gradient(90deg, #f0bf6a, #ff9a5f); padding:9px 13px; border-radius:999px; font-size:12px; font-weight:800; box-shadow:0 16px 46px rgba(0,0,0,.42); transition:opacity .18s ease, transform .18s ease; }
+      .image-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+      @media (max-width: 840px) {
+        .image-lightbox-shell { grid-template-columns:1fr; overflow:auto; }
+        .image-lightbox.video-open .image-lightbox-shell { height:calc(100vh - 16px); width:calc(100vw - 16px); grid-template-rows:minmax(0, 1fr); overflow:hidden; }
+        .image-lightbox-stage img, .image-lightbox-stage video { max-height:58vh; }
+        .image-lightbox.video-open .image-lightbox-stage video,
+        .image-lightbox.video-open .image-lightbox-stage .plyr { max-height:100%; }
       }
       .companion-dock {
         display: none;
@@ -803,6 +1090,12 @@
       }
       .md-block blockquote { border-left-color: #3a332d; color: #8a8883; }
       .md-block a { color: #d9a36c; }
+      .message-copy-btn {
+        background: #171717;
+        border-color: #2c2c2c;
+        color: #7c7a74;
+      }
+      .message-copy-btn:hover { background:#202020; color:#d9a36c; border-color:#3a332d; }
 
       .input-row { margin-top: 0; padding-right: 16px; }
       .input-line {
@@ -998,6 +1291,10 @@
       <div class="sidebar-header">
         <h2>Sessions</h2>
         <div class="sidebar-actions">
+          <button class="btn-integration" id="btnCodex" type="button" title="Codex 接入">
+            <span>Codex</span>
+            <span class="state" id="codexMenuState">未连</span>
+          </button>
           <button class="btn-integration" id="btnFeishu" type="button" title="飞书接入">
             <span>飞书</span>
             <span class="state" id="feishuMenuState">未连</span>
@@ -1017,6 +1314,7 @@
         <div class="chrome-pill">streaming events</div>
         <div class="chrome-pill">isolated session</div>
       </div>
+
       <div class="term-output" id="termOutput" tabindex="0"></div>
       <div class="workspace-banner" id="workspaceBanner" aria-live="polite"></div>
       <div class="task-panel" id="taskPanel" aria-live="polite"></div>
@@ -1036,7 +1334,67 @@
         </div>
         <div class="perm-result" id="permResult" style="display:none"></div>
       </div>
+      <div class="runtime-status" id="runtimeStatus" aria-live="polite">
+        <span class="status-led" aria-hidden="true"></span>
+        <span class="status-chip primary" title="当前聊天模型"><span class="k">Model</span><span class="v" id="statusModel">loading…</span></span>
+        <span class="status-chip" title="当前 Prompt 模板"><span class="k">Prompt</span><select class="prompt-template-select" id="promptTemplateSelect" aria-label="Prompt template"><option>loading…</option></select></span>
+        <span class="status-chip" title="图片生成配置"><span class="k">Image</span><span class="v" id="statusImage">loading…</span></span>
+        <span class="status-chip" title="Codex 接入状态"><span class="k">Codex</span><span class="v" id="statusCodex">loading…</span></span>
+        <span class="status-chip optional" title="当前上下文用量"><span class="k">Context</span><span class="v" id="statusContext">-</span></span>
+        <span class="status-chip optional" title="额度状态"><span class="k">Quota</span><span class="v" id="statusQuota">loading…</span></span>
+        <span class="status-chip optional" title="当前用户与组织"><span class="k">User</span><span class="v" id="statusUser">-</span></span>
+        <span class="status-chip optional" title="当前 session"><span class="k">Session</span><span class="v" id="statusSession">none</span></span>
+        <button class="status-refresh" id="statusRefresh" type="button" title="刷新运行状态">refresh</button>
+      </div>
     </div>
+
+    <div class="image-playground-modal" id="imagePlaygroundModal" aria-hidden="true">
+      <div class="image-playground-panel" role="dialog" aria-modal="true" aria-labelledby="imagePlaygroundTitle">
+        <div class="image-playground-head">
+          <div>
+            <div class="image-playground-title" id="imagePlaygroundTitle">Image Playground</div>
+            <div class="image-playground-note">基于后端 OpenAI-compatible Images/Responses 能力生成或编辑图片；结果会保存为当前 session 的附件。</div>
+          </div>
+          <button class="image-playground-close" id="imagePlaygroundClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="image-playground-grid">
+          <label class="image-playground-field"><span>Prompt</span><textarea id="imagePlaygroundPrompt" placeholder="Describe the image you want to generate or how to edit selected references..."></textarea></label>
+          <label class="image-playground-field"><span>Mode</span><select id="imagePlaygroundMode"><option value="generate">Generate</option><option value="edit">Edit selected images</option></select></label>
+          <label class="image-playground-field"><span>Size</span><select id="imagePlaygroundSize"><option value="1024x1024">1K square</option><option value="1536x1024">landscape</option><option value="1024x1536">portrait</option><option value="2048x2048">2K square</option><option value="4096x4096">4K square</option><option value="auto">auto</option></select></label>
+          <label class="image-playground-field"><span>Quality</span><select id="imagePlaygroundQuality"><option value="">default</option><option value="auto">auto</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+          <label class="image-playground-field"><span>Count</span><input id="imagePlaygroundCount" type="number" min="1" max="4" value="1" /></label>
+        </div>
+        <div class="image-playground-note" id="imagePlaygroundSelection">Edit mode uses current pending image attachments as references. Generated images can be sent with your next message.</div>
+        <div class="image-playground-actions">
+          <button id="imagePlaygroundUsePending" type="button">Use pending as edit refs</button>
+          <button id="imagePlaygroundGenerate" type="button">Generate</button>
+        </div>
+        <div class="image-playground-note" id="imagePlaygroundStatus"></div>
+        <div class="image-playground-results" id="imagePlaygroundResults"></div>
+      </div>
+    </div>
+
+    <div class="image-lightbox" id="imageLightbox" aria-hidden="true">
+      <button class="image-lightbox-close" id="imageLightboxClose" type="button" aria-label="关闭图片预览">×</button>
+      <div class="image-lightbox-shell" role="dialog" aria-modal="true" aria-labelledby="imageLightboxTitle">
+        <div class="image-lightbox-stage">
+          <img id="imageLightboxImg" alt="generated image preview" />
+          <video id="imageLightboxVideo" controls playsinline preload="metadata" style="display:none"></video>
+        </div>
+        <div class="image-lightbox-side">
+          <div class="image-lightbox-kicker" id="imageLightboxKicker">Generated attachment</div>
+          <div class="image-lightbox-title" id="imageLightboxTitle">image</div>
+          <div class="image-lightbox-meta" id="imageLightboxMeta"></div>
+          <div class="image-lightbox-actions">
+            <button id="imageLightboxCopyImage" type="button">复制图片到剪贴板</button>
+            <button id="imageLightboxCopyLink" type="button">复制图片链接</button>
+            <button id="imageLightboxCopyId" type="button">复制附件 ID</button>
+            <a id="imageLightboxDownload" href="#" download>下载原文件</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="image-toast" id="imageToast" aria-live="polite"></div>
 
     <div class="integration-modal" id="feishuModal" aria-hidden="true">
       <div class="integration-card" role="dialog" aria-modal="true" aria-labelledby="feishuModalTitle">
@@ -1101,8 +1459,72 @@
       </div>
     </div>
 
+    <div class="integration-modal" id="codexModal" aria-hidden="true">
+      <div class="integration-card" role="dialog" aria-modal="true" aria-labelledby="codexModalTitle">
+        <div class="integration-head">
+          <div class="integration-logo">Cx</div>
+          <div>
+            <div class="integration-title" id="codexModalTitle">接入 Codex</div>
+            <div class="integration-sub">支持 codex-proxy API Key、官方 Codex access token、完整 auth.json；保存后模型、Vision、Image Playground 会自动复用。</div>
+          </div>
+          <button class="integration-close" id="codexClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="integration-body">
+          <div class="integration-status">
+            <div class="integration-stat" id="codexStatusCard"><div class="k">状态</div><div class="v" id="codexStatusText">加载中</div></div>
+            <div class="integration-stat"><div class="k">来源</div><div class="v" id="codexSourceText">-</div></div>
+            <div class="integration-stat"><div class="k">Base URL</div><div class="v" id="codexBaseUrlText">-</div></div>
+            <div class="integration-stat"><div class="k">模型</div><div class="v" id="codexModelText">-</div></div>
+          </div>
+          <div class="integration-form">
+            <div class="integration-field">
+              <label>凭证类型 <span>推荐 codex-proxy API Key</span></label>
+              <select id="codexCredentialType">
+                <option value="api_key">codex-proxy / OpenAI-compatible API Key</option>
+                <option value="access_token">Codex Access Token</option>
+                <option value="auth_json">完整 auth.json</option>
+              </select>
+            </div>
+            <div class="integration-field">
+              <label>Secret <span>仅本机保存，接口不会回显</span></label>
+              <textarea id="codexSecret" autocomplete="off" placeholder="粘贴 Dashboard API Key、access token，或完整 auth.json"></textarea>
+            </div>
+            <div class="integration-field">
+              <label>Base URL <span>默认 codex-proxy</span></label>
+              <input id="codexBaseUrl" autocomplete="off" placeholder="http://localhost:8080/v1" />
+            </div>
+            <div class="integration-field">
+              <label>Chat Model <span>/model codex 默认模型</span></label>
+              <input id="codexModel" autocomplete="off" placeholder="gpt-5.4" />
+            </div>
+            <div class="integration-field">
+              <label>Image Model <span>Image Playground 默认模型</span></label>
+              <input id="codexImageModel" autocomplete="off" placeholder="gpt-image-2" />
+            </div>
+            <div class="integration-help">
+              普通聊天推荐粘贴 <code>codex-proxy</code> Dashboard API Key。点击「用 ChatGPT 登录」会调用官方 <code>codex login</code>，浏览器通过 <code>localhost:1455</code> 回调写入 <code>auth.json</code>；这能证明你已登录 Codex，但官方 ChatGPT token 默认不会被当成 OpenAI-compatible API Key 使用，避免普通聊天误连失败。
+            </div>
+            <div class="integration-actions">
+              <button class="integration-action primary" id="codexLoginBrowser" type="button">用 ChatGPT 登录</button>
+              <button class="integration-action" id="codexLoginDevice" type="button">设备码登录</button>
+              <button class="integration-action primary" id="codexSave" type="button">保存接入</button>
+              <button class="integration-action" id="codexRefresh" type="button">刷新状态</button>
+              <button class="integration-action danger" id="codexDisconnect" type="button">清除应用内凭证</button>
+              <span class="integration-message" id="codexMessage"></span>
+            </div>
+            <pre class="integration-logs" id="codexLoginLogs">暂无登录日志</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+    <div class="ctx-menu" id="ctxMenu">
+      <div class="ctx-menu-item" data-action="rename">Rename</div>
+      <div class="ctx-menu-item danger" data-action="delete">Delete</div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.polyfilled.min.js"></script>
     <script>
     (function () {
       var API = '/terminal/api';
@@ -1111,9 +1533,40 @@
       var companionDock = document.getElementById('companionDock');
       var badge = document.getElementById('badge');
       var badgeText = document.getElementById('badgeText');
+      var runtimeStatus = document.getElementById('runtimeStatus');
+      var statusModel = document.getElementById('statusModel');
+      var promptTemplateSelect = document.getElementById('promptTemplateSelect');
+      var statusImage = document.getElementById('statusImage');
+      var statusCodex = document.getElementById('statusCodex');
+      var statusContext = document.getElementById('statusContext');
+      var statusQuota = document.getElementById('statusQuota');
+      var statusUser = document.getElementById('statusUser');
+      var statusSession = document.getElementById('statusSession');
+      var statusRefresh = document.getElementById('statusRefresh');
       var sessionList = document.getElementById('sessionList');
       var btnNew = document.getElementById('btnNew');
       var btnLogout = document.getElementById('btnLogout');
+      var btnCodex = document.getElementById('btnCodex');
+      var codexMenuState = document.getElementById('codexMenuState');
+      var codexModal = document.getElementById('codexModal');
+      var codexClose = document.getElementById('codexClose');
+      var codexStatusCard = document.getElementById('codexStatusCard');
+      var codexStatusText = document.getElementById('codexStatusText');
+      var codexSourceText = document.getElementById('codexSourceText');
+      var codexBaseUrlText = document.getElementById('codexBaseUrlText');
+      var codexModelText = document.getElementById('codexModelText');
+      var codexCredentialType = document.getElementById('codexCredentialType');
+      var codexSecret = document.getElementById('codexSecret');
+      var codexBaseUrl = document.getElementById('codexBaseUrl');
+      var codexModel = document.getElementById('codexModel');
+      var codexImageModel = document.getElementById('codexImageModel');
+      var codexLoginBrowser = document.getElementById('codexLoginBrowser');
+      var codexLoginDevice = document.getElementById('codexLoginDevice');
+      var codexSave = document.getElementById('codexSave');
+      var codexRefresh = document.getElementById('codexRefresh');
+      var codexDisconnect = document.getElementById('codexDisconnect');
+      var codexMessage = document.getElementById('codexMessage');
+      var codexLoginLogs = document.getElementById('codexLoginLogs');
       var btnFeishu = document.getElementById('btnFeishu');
       var feishuMenuState = document.getElementById('feishuMenuState');
       var feishuModal = document.getElementById('feishuModal');
@@ -1137,6 +1590,30 @@
       var feishuDisconnect = document.getElementById('feishuDisconnect');
       var feishuMessage = document.getElementById('feishuMessage');
       var feishuBridgeLogs = document.getElementById('feishuBridgeLogs');
+      var imagePlaygroundModal = document.getElementById('imagePlaygroundModal');
+      var imagePlaygroundClose = document.getElementById('imagePlaygroundClose');
+      var imagePlaygroundPrompt = document.getElementById('imagePlaygroundPrompt');
+      var imagePlaygroundMode = document.getElementById('imagePlaygroundMode');
+      var imagePlaygroundSize = document.getElementById('imagePlaygroundSize');
+      var imagePlaygroundQuality = document.getElementById('imagePlaygroundQuality');
+      var imagePlaygroundCount = document.getElementById('imagePlaygroundCount');
+      var imagePlaygroundUsePending = document.getElementById('imagePlaygroundUsePending');
+      var imagePlaygroundGenerate = document.getElementById('imagePlaygroundGenerate');
+      var imagePlaygroundStatus = document.getElementById('imagePlaygroundStatus');
+      var imagePlaygroundResults = document.getElementById('imagePlaygroundResults');
+      var imagePlaygroundSelection = document.getElementById('imagePlaygroundSelection');
+      var imageLightbox = document.getElementById('imageLightbox');
+      var imageLightboxClose = document.getElementById('imageLightboxClose');
+      var imageLightboxImg = document.getElementById('imageLightboxImg');
+      var imageLightboxVideo = document.getElementById('imageLightboxVideo');
+      var imageLightboxKicker = document.getElementById('imageLightboxKicker');
+      var imageLightboxTitle = document.getElementById('imageLightboxTitle');
+      var imageLightboxMeta = document.getElementById('imageLightboxMeta');
+      var imageLightboxCopyImage = document.getElementById('imageLightboxCopyImage');
+      var imageLightboxCopyLink = document.getElementById('imageLightboxCopyLink');
+      var imageLightboxCopyId = document.getElementById('imageLightboxCopyId');
+      var imageLightboxDownload = document.getElementById('imageLightboxDownload');
+      var imageToast = document.getElementById('imageToast');
       var permBar = document.getElementById('permBar');
       var permPrompt = document.getElementById('permPrompt');
       var permDetail = document.getElementById('permDetail');
@@ -1148,15 +1625,25 @@
       var currentSessionId = null;
       var ws = null;
       var agentRunning = false;
+      var promptTemplates = [];
 
       // 行编辑状态
       var lineBuffer = '';
       var inputRowEl = null;   // input-row div
       var inputEl = null;     // 真实 <input> 元素
+      var fileInputEl = null;
+      var pendingAttachments = [];
+      var currentLightboxAttachment = null;
+      var currentLightboxPlayer = null;
+      var imageToastTimer = null;
+      var uploadingImages = 0;
+      var codexLoginPollTimer = null;
       var commandHistory = [];
       var historyIndex = null;
       var historyDraft = '';
       var abortRequested = false;
+      var contextUsedTokens = 0;
+      var contextWindowTokens = 200000;
       var slashMenuEl = null;
       var slashSelectedIndex = 0;
       var slashCommands = [
@@ -1167,6 +1654,7 @@
         { name: '/memory', usage: '/memory [show|path|clear]', description: '查看 session memory' },
         { name: '/skills', usage: '/skills [reload|show <name>]', description: '列出、刷新或查看本地 skills' },
         { name: '/model', usage: '/model [list|current|<model_id>|<provider> <model_id>]', description: '查看或切换当前 session 使用的模型' },
+        { name: '/prompt', usage: '/prompt [list|current|<template>]', description: '查看或切换当前 session 使用的 Prompt 模板' },
         { name: '/permissions', usage: '/permissions [default|acceptEdits|plan|bypassPermissions|yolo]', description: '查看或切换权限模式' },
         { name: '/yolo', usage: '/yolo', description: '切换到 YOLO 权限模式（等价于 /permissions yolo）' },
         { name: '/sandbox', usage: '/sandbox [enable|disable|open|closed|auto-on|auto-off|exclude <pattern>|unexclude <pattern>]', description: '查看或配置 Bash 沙箱' },
@@ -1191,6 +1679,7 @@
       var workspaceState = null;
 
       // 当前流式 markdown
+      var currentMdWrap = null;
       var currentMdEl = null;
       var currentTextBuffer = '';
       var currentThinkingWrap = null;
@@ -1201,7 +1690,7 @@
       var reconnectAttempt = 0;
       var intentionalClose = false;
       var lastAgentEventAt = 0;
-      var AGENT_IDLE_TIMEOUT_MS = 150000;
+      var AGENT_IDLE_TIMEOUT_MS = 25 * 60 * 1000;
 
       function setBadge(state, text) {
         badge.className = 'badge ' + state;
@@ -1234,7 +1723,39 @@
       }
 
       // ── 输出工具函数 ──
-      function scrollBottom() { termOutput.scrollTop = termOutput.scrollHeight; }
+      var userScrolledUp = false;
+      termOutput.addEventListener('scroll', function () {
+        var threshold = 80;
+        var atBottom = termOutput.scrollHeight - termOutput.scrollTop - termOutput.clientHeight < threshold;
+        userScrolledUp = !atBottom;
+      });
+      function scrollBottom() {
+        if (userScrolledUp) return;
+        termOutput.scrollTop = termOutput.scrollHeight;
+      }
+
+      function focusInput(options) {
+        if (!inputEl) return;
+        try {
+          inputEl.focus(options || {});
+        } catch (_) {
+          inputEl.focus();
+        }
+      }
+
+      function isTerminalInteractiveClick(target) {
+        if (!target || !target.closest) return false;
+        return Boolean(target.closest([
+          'video', 'audio', 'button', 'a', 'input', 'textarea', 'select', 'label',
+          '.plyr', '.image-gallery', '.image-lightbox', '.image-playground-modal',
+          '.attachment-preview', '.slash-menu', '.thinking-wrap', '[contenteditable="true"]'
+        ].join(',')));
+      }
+
+      function isSelectingText() {
+        var sel = window.getSelection && window.getSelection();
+        return !!(sel && String(sel).length);
+      }
 
       function appendLine(html, cls) {
         var div = document.createElement('div');
@@ -1251,6 +1772,34 @@
         div.textContent = text;
         appendBeforeInput(div);
         scrollBottom();
+      }
+
+      function createMessageCopyButton(getText) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'message-copy-btn';
+        btn.title = '复制这条回复';
+        btn.setAttribute('aria-label', '复制这条回复');
+        btn.textContent = '⧉';
+        btn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          copyTextToClipboard(getText ? getText() : '', '回复已复制');
+        };
+        return btn;
+      }
+
+      function createAssistantMessage(text) {
+        var wrap = document.createElement('div');
+        wrap.className = 'md-message';
+        wrap.dataset.rawText = text || '';
+        var body = document.createElement('div');
+        body.className = 'md-block';
+        body.innerHTML = renderMarkdown(text || '');
+        wrap.appendChild(body);
+        wrap.appendChild(createMessageCopyButton(function () { return wrap.dataset.rawText || body.innerText || ''; }));
+        highlightCodeBlocks(body);
+        return { wrap: wrap, body: body };
       }
 
       function appendCommandResult(title, content, isError, metadata) {
@@ -1464,6 +2013,18 @@
         return String(n);
       }
 
+      function updateContextUsage(usage) {
+        if (!usage) return;
+        var prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
+        if (!prompt) return;
+        contextUsedTokens = prompt;
+        var pct = Math.round((contextUsedTokens / contextWindowTokens) * 100);
+        statusContext.textContent = formatTokenCount(contextUsedTokens) + ' / ' + formatTokenCount(contextWindowTokens) + ' (' + pct + '%)';
+        if (pct >= 80) setChipState(statusContext, 'bad');
+        else if (pct >= 50) setChipState(statusContext, 'warn');
+        else setChipState(statusContext, 'good');
+      }
+
       function formatMoney(value, currency) {
         value = Number(value || 0);
         currency = currency || 'CNY';
@@ -1620,10 +2181,11 @@
         }
         var row = document.createElement('div');
         row.className = 'input-row';
-        row.innerHTML = '<div class="input-line"><span class="prompt">agent&gt;</span><input type="text" autocomplete="off" spellcheck="false" /><span class="input-cursor"></span></div>';
+        row.innerHTML = '<div class="attachment-preview"></div><div class="input-line"><span class="prompt">agent&gt;</span><input type="text" autocomplete="off" spellcheck="false" /><button class="input-action image-playground-open" type="button" title="Generate or edit image">✧</button><button class="input-action attach-open" type="button" title="Attach image, video or audio">▣</button><input class="image-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,video/mpeg,video/x-msvideo,audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/webm" multiple style="display:none" /><span class="input-cursor"></span></div><div class="upload-hint"></div>';
         termOutput.appendChild(row);
         inputRowEl = row;
         inputEl = row.querySelector('input');
+        fileInputEl = row.querySelector('.image-file-input');
         inputEl.placeholder = 'type /help for commands';
         lineBuffer = '';
         historyIndex = null;
@@ -1637,6 +2199,21 @@
           setTimeout(function () { showCompanionReaction(pendingReaction); }, 40);
         }
         updateSlashMenu();
+        bindImageInput(row);
+        renderAttachmentPreview();
+      }
+
+      function bindImageInput(row) {
+        var action = row.querySelector('.attach-open');
+        var playground = row.querySelector('.image-playground-open');
+        if (action) action.onclick = function () { if (fileInputEl) fileInputEl.click(); };
+        if (playground) playground.onclick = function () { openImagePlayground(); };
+        if (fileInputEl) {
+          fileInputEl.onchange = function () {
+            uploadImageFiles(Array.prototype.slice.call(fileInputEl.files || []));
+            fileInputEl.value = '';
+          };
+        }
       }
 
       function setInputValue(value) {
@@ -1647,6 +2224,498 @@
         try { inputEl.setSelectionRange(end, end); } catch (_) {}
         updateSlashMenu();
       }
+
+      function formatBytes(n) {
+        n = Number(n || 0);
+        if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+        if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+        return n + ' B';
+      }
+
+      function isSupportedMediaFile(file) {
+        if (!file) return false;
+        var type = String(file.type || '').toLowerCase();
+        if (/^(image|video|audio)\//.test(type)) return true;
+        var name = String(file.name || '').toLowerCase();
+        return /\.(png|jpe?g|gif|webp|mp4|mov|webm|mpeg|mpg|avi|mp3|m4a|aac|wav|ogg)$/.test(name);
+      }
+
+      function renderAttachmentPreview() {
+        if (!inputRowEl) return;
+        var box = inputRowEl.querySelector('.attachment-preview');
+        var hint = inputRowEl.querySelector('.upload-hint');
+        var action = inputRowEl.querySelector('.attach-open');
+        if (!box) return;
+        box.innerHTML = '';
+        pendingAttachments.forEach(function (item, idx) {
+          var chip = document.createElement('div');
+          chip.className = 'attachment-chip';
+          var thumb;
+          if (/^video\//.test(item.content_type || '')) {
+            thumb = document.createElement('video');
+            thumb.src = item.preview_url || '';
+            thumb.muted = true;
+            thumb.playsInline = true;
+            thumb.preload = 'metadata';
+            thumb.onclick = function (e) { e.stopPropagation(); openImageLightbox(item); };
+          } else if (/^image\//.test(item.content_type || '')) {
+            thumb = document.createElement('img');
+            thumb.src = normalizeAttachmentUrl(item);
+            thumb.alt = humanImageLabel(item);
+            thumb.title = '点击放大预览';
+            thumb.onclick = function (e) { e.stopPropagation(); openImageLightbox(item); };
+          } else {
+            thumb = document.createElement('div');
+            thumb.className = 'attachment-media-icon';
+            thumb.textContent = '▣';
+          }
+          var meta = document.createElement('div');
+          meta.style.minWidth = '0';
+          meta.innerHTML = '<div class="attachment-name">' + escapeHtml(item.filename || 'image') + '</div><div class="attachment-meta">' + escapeHtml(item.id || 'uploading') + ' · ' + formatBytes(item.size_bytes) + '</div>';
+          var remove = document.createElement('button');
+          remove.className = 'attachment-remove';
+          remove.type = 'button';
+          remove.textContent = '×';
+          remove.onclick = function () {
+            pendingAttachments.splice(idx, 1);
+            renderAttachmentPreview();
+          };
+          chip.appendChild(thumb);
+          chip.appendChild(meta);
+          chip.appendChild(remove);
+          box.appendChild(chip);
+        });
+        if (hint) hint.textContent = uploadingImages ? ('uploading ' + uploadingImages + ' media file(s)…') : (pendingAttachments.length ? 'media attached — send a message or press Enter' : 'paste, drag, or attach images/videos/audio');
+        if (action) action.classList.toggle('uploading', uploadingImages > 0);
+      }
+
+      function uploadImageFiles(files) {
+        files = (files || []).filter(isSupportedMediaFile);
+        if (!files.length || !currentSessionId) return;
+        files.forEach(function (file) {
+          var previewUrl = URL.createObjectURL(file);
+          uploadingImages += 1;
+          renderAttachmentPreview();
+          var form = new FormData();
+          form.append('file', file, file.name || 'image');
+          fetch(API + '/sessions/' + encodeURIComponent(currentSessionId) + '/attachments/media', { method: 'POST', body: form })
+            .then(function (r) {
+              if (r.status === 401) {
+                location.href = '/terminal/login';
+                throw { detail: 'Terminal authentication required' };
+              }
+              if (!r.ok) {
+                return r.text().then(function (text) {
+                  var detail = text || r.statusText || ('HTTP ' + r.status);
+                  try {
+                    var parsed = JSON.parse(text || '{}');
+                    detail = parsed.detail || parsed.message || detail;
+                  } catch (_) {}
+                  throw { detail: detail, status: r.status };
+                });
+              }
+              return r.json();
+            })
+            .then(function (data) {
+              var item = data.attachment || {};
+              item.preview_url = previewUrl;
+              pendingAttachments.push(item);
+            })
+            .catch(function (err) {
+              URL.revokeObjectURL(previewUrl);
+              appendLine('[media upload failed: ' + escapeHtml((err && (err.detail || err.message)) || 'network error') + ']', 'err-line');
+            })
+            .finally(function () {
+              uploadingImages = Math.max(0, uploadingImages - 1);
+              renderAttachmentPreview();
+              if (inputEl) inputEl.focus();
+            });
+        });
+      }
+
+      function pendingImageAttachments() {
+        return pendingAttachments.filter(function (item) { return /^image\//.test(item.content_type || ''); });
+      }
+
+      function normalizeAttachmentUrl(item) {
+        if (!item) return '';
+        var url = item.preview_url || item.content_url || item.url || '';
+        if (url) return url;
+        if (currentSessionId && item.id) return API + '/sessions/' + encodeURIComponent(currentSessionId) + '/attachments/' + encodeURIComponent(item.id) + '/content';
+        return '';
+      }
+
+      function absoluteImageUrl(url) {
+        url = String(url || '');
+        if (!url) return '';
+        if (/^https?:\/\//i.test(url)) return url;
+        return location.origin + url;
+      }
+
+      function isImageAttachment(item) {
+        return /^image\//.test((item && item.content_type) || '');
+      }
+
+      function isVideoAttachment(item) {
+        return /^video\//.test((item && item.content_type) || '');
+      }
+
+      function isAudioAttachment(item) {
+        return /^audio\//.test((item && item.content_type) || '');
+      }
+
+      function humanImageLabel(item) {
+        return (item && (item.filename || item.id)) || (isVideoAttachment(item) ? 'generated-video.mp4' : (isAudioAttachment(item) ? 'reference-audio.mp3' : 'generated-image.png'));
+      }
+
+      function enhanceVideoPlayer(video, options) {
+        if (!video || !window.Plyr) return null;
+        try {
+          return new Plyr(video, Object.assign({
+            controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'],
+            settings: ['speed'],
+            speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+            ratio: '16:9',
+            keyboard: { focused: true, global: false }
+          }, options || {}));
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function setVideoSource(video, url, contentType) {
+        if (!video) return;
+        video.pause();
+        while (video.firstChild) video.removeChild(video.firstChild);
+        video.removeAttribute('src');
+        video.controls = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+        if (url) {
+          var source = document.createElement('source');
+          source.src = url;
+          if (contentType) source.type = contentType;
+          video.appendChild(source);
+          video.src = url;
+        }
+        try { video.load(); } catch (_) {}
+      }
+
+      function showImageToast(text) {
+        if (!imageToast) return;
+        imageToast.textContent = text || '';
+        imageToast.classList.add('show');
+        if (imageToastTimer) clearTimeout(imageToastTimer);
+        imageToastTimer = setTimeout(function () { imageToast.classList.remove('show'); }, 1600);
+      }
+
+      function copyTextToClipboard(text, label) {
+        text = String(text || '');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(text).then(function () { showImageToast(label || '已复制'); });
+        }
+        var tmp = document.createElement('textarea');
+        tmp.value = text;
+        tmp.setAttribute('readonly', '');
+        tmp.style.position = 'fixed';
+        tmp.style.opacity = '0';
+        document.body.appendChild(tmp);
+        tmp.select();
+        try { document.execCommand('copy'); showImageToast(label || '已复制'); }
+        finally { tmp.remove(); }
+        return Promise.resolve();
+      }
+
+      function copyImageToClipboard(item) {
+        var url = normalizeAttachmentUrl(item);
+        if (!url) return copyTextToClipboard(item && item.id, '已复制附件 ID');
+        if (!navigator.clipboard || !window.ClipboardItem) {
+          return copyTextToClipboard(absoluteImageUrl(url), '浏览器不支持复制图片，已复制链接');
+        }
+        return fetch(url, { credentials: 'include' })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+          .then(function (blob) {
+            var type = blob.type || (item && item.content_type) || 'image/png';
+            return navigator.clipboard.write([new ClipboardItem(Object.fromEntries([[type, blob]]))]);
+          })
+          .then(function () { showImageToast('图片已复制到剪贴板'); })
+          .catch(function () { return copyTextToClipboard(absoluteImageUrl(url), '复制图片失败，已复制链接'); });
+      }
+
+      function openImageLightbox(item) {
+        if (!imageLightbox || !item) return;
+        currentLightboxAttachment = item;
+        var url = normalizeAttachmentUrl(item);
+        var isVideo = isVideoAttachment(item);
+        imageLightbox.classList.toggle('video-open', isVideo);
+        if (currentLightboxPlayer && currentLightboxPlayer.destroy) {
+          try { currentLightboxPlayer.destroy(); } catch (_) {}
+          currentLightboxPlayer = null;
+        }
+        if (imageLightboxImg) {
+          imageLightboxImg.style.display = isVideo ? 'none' : '';
+          imageLightboxImg.src = isVideo ? '' : url;
+          imageLightboxImg.alt = humanImageLabel(item);
+        }
+        if (imageLightboxVideo) {
+          imageLightboxVideo.style.display = isVideo ? '' : 'none';
+          setVideoSource(imageLightboxVideo, isVideo ? url : '', isVideo ? (item.content_type || 'video/mp4') : '');
+        }
+        if (imageLightboxKicker) imageLightboxKicker.textContent = isVideo ? 'Generated video attachment' : 'Generated image attachment';
+        if (imageLightboxTitle) imageLightboxTitle.textContent = humanImageLabel(item);
+        if (imageLightboxMeta) {
+          imageLightboxMeta.textContent = [
+            item.id ? ('ID: ' + item.id) : '',
+            item.content_type || '',
+            item.size_bytes ? formatBytes(item.size_bytes) : '',
+            item.metadata && item.metadata.task_id ? ('task: ' + item.metadata.task_id) : '',
+            item.metadata && item.metadata.raw_url ? ('source: ' + item.metadata.raw_url) : '',
+            item.metadata && item.metadata.prompt ? ('prompt: ' + item.metadata.prompt) : ''
+          ].filter(Boolean).join('\n');
+        }
+        if (imageLightboxCopyImage) {
+          imageLightboxCopyImage.style.display = isVideo ? 'none' : '';
+          imageLightboxCopyImage.textContent = '复制图片到剪贴板';
+        }
+        if (imageLightboxCopyLink) imageLightboxCopyLink.textContent = isVideo ? '复制视频链接' : '复制图片链接';
+        if (imageLightboxDownload) imageLightboxDownload.textContent = isVideo ? '下载视频' : '下载原图';
+        if (imageLightboxDownload) {
+          imageLightboxDownload.href = url || '#';
+          imageLightboxDownload.download = humanImageLabel(item);
+        }
+        imageLightbox.classList.add('open');
+        imageLightbox.setAttribute('aria-hidden', 'false');
+        // Keep the lightbox video on native controls by default. Native playback is
+        // more reliable for signed/local attachment URLs and still supports full-screen.
+      }
+
+      function closeImageLightbox() {
+        if (!imageLightbox) return;
+        imageLightbox.classList.remove('open');
+        imageLightbox.classList.remove('video-open');
+        imageLightbox.setAttribute('aria-hidden', 'true');
+        currentLightboxAttachment = null;
+        if (imageLightboxImg) imageLightboxImg.src = '';
+        if (currentLightboxPlayer && currentLightboxPlayer.destroy) {
+          try { currentLightboxPlayer.destroy(); } catch (_) {}
+          currentLightboxPlayer = null;
+        }
+        if (imageLightboxVideo) {
+          setVideoSource(imageLightboxVideo, '', '');
+        }
+      }
+
+      function createImageActionButton(label, handler) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'image-mini-action';
+        btn.textContent = label;
+        btn.onclick = function (e) { e.preventDefault(); e.stopPropagation(); handler(); };
+        return btn;
+      }
+
+      function createMediaDownloadLink(item) {
+        var link = document.createElement('a');
+        link.className = 'image-mini-action';
+        link.textContent = isVideoAttachment(item) ? '下载视频' : (isAudioAttachment(item) ? '下载音频' : '下载');
+        link.href = normalizeAttachmentUrl(item) || '#';
+        link.download = humanImageLabel(item);
+        link.onclick = function (e) { e.stopPropagation(); };
+        return link;
+      }
+
+      function renderGeneratedImageGallery(attachments) {
+        attachments = (attachments || []).filter(function (item) { return /^(image|video|audio)\//.test(item.content_type || ''); });
+        if (!attachments.length) return null;
+        var gallery = document.createElement('div');
+        gallery.className = 'image-gallery';
+        attachments.forEach(function (item) {
+          var card = document.createElement('div');
+          var isVideo = /^video\//.test(item.content_type || '');
+          var isAudio = /^audio\//.test(item.content_type || '');
+          card.className = 'image-gallery-card' + (isVideo ? ' video-card' : '') + (isAudio ? ' audio-card' : '');
+          var media;
+          var kind = document.createElement('div');
+          kind.className = 'media-kind-pill';
+          kind.textContent = isVideo ? 'video' : (isAudio ? 'audio' : 'image');
+          card.appendChild(kind);
+          if (isVideo) {
+            media = document.createElement('video');
+            setVideoSource(media, normalizeAttachmentUrl(item), item.content_type || 'video/mp4');
+            media.controls = true;
+            media.playsInline = true;
+            media.preload = 'metadata';
+            media.addEventListener('click', function (e) { e.stopPropagation(); });
+          } else if (isAudio) {
+            media = document.createElement('audio');
+            media.src = normalizeAttachmentUrl(item);
+            media.controls = true;
+            media.preload = 'metadata';
+          } else {
+            media = document.createElement('img');
+            media.src = normalizeAttachmentUrl(item);
+            media.alt = humanImageLabel(item);
+            media.onclick = function (e) { e.stopPropagation(); openImageLightbox(item); };
+          }
+          var caption = document.createElement('div');
+          caption.className = 'image-gallery-caption';
+          caption.textContent = humanImageLabel(item);
+          var actions = document.createElement('div');
+          actions.className = 'image-gallery-actions';
+          if (!isAudio) actions.appendChild(createImageActionButton(isVideo ? '影院预览' : '放大', function () { openImageLightbox(item); }));
+          if (!isVideo && !isAudio) {
+            actions.appendChild(createImageActionButton('复制图', function () { copyImageToClipboard(item); }));
+          } else {
+            actions.appendChild(createImageActionButton('复制链接', function () { copyTextToClipboard(absoluteImageUrl(normalizeAttachmentUrl(item)), isAudio ? '音频链接已复制' : '视频链接已复制'); }));
+          }
+          actions.appendChild(createMediaDownloadLink(item));
+          actions.appendChild(createImageActionButton('复制ID', function () { copyTextToClipboard(item.id || '', '附件 ID 已复制'); }));
+          card.appendChild(media);
+          card.appendChild(caption);
+          card.appendChild(actions);
+          gallery.appendChild(card);
+        });
+        return gallery;
+      }
+
+      function openImagePlayground() {
+        if (!imagePlaygroundModal) return;
+        imagePlaygroundModal.classList.add('open');
+        imagePlaygroundModal.setAttribute('aria-hidden', 'false');
+        if (imagePlaygroundPrompt && inputEl && inputEl.value && !imagePlaygroundPrompt.value) imagePlaygroundPrompt.value = inputEl.value;
+        updateImagePlaygroundSelection();
+        setTimeout(function () { if (imagePlaygroundPrompt) imagePlaygroundPrompt.focus(); }, 20);
+      }
+
+      function closeImagePlayground() {
+        if (!imagePlaygroundModal) return;
+        imagePlaygroundModal.classList.remove('open');
+        imagePlaygroundModal.setAttribute('aria-hidden', 'true');
+        if (inputEl) inputEl.focus();
+      }
+
+      function updateImagePlaygroundSelection() {
+        if (!imagePlaygroundSelection) return;
+        var images = pendingImageAttachments();
+        var mode = imagePlaygroundMode ? imagePlaygroundMode.value : 'generate';
+        imagePlaygroundSelection.textContent = mode === 'edit'
+          ? ('Edit mode will use ' + images.length + ' pending image attachment(s): ' + (images.map(function (x) { return x.id; }).join(', ') || 'none'))
+          : 'Generate mode creates new images. Switch to Edit to use current pending image attachments as references.';
+      }
+
+      function setImagePlaygroundBusy(busy, text) {
+        if (imagePlaygroundGenerate) imagePlaygroundGenerate.disabled = !!busy;
+        if (imagePlaygroundStatus) imagePlaygroundStatus.textContent = text || '';
+      }
+
+      function addImagePlaygroundResult(item) {
+        if (!imagePlaygroundResults) return;
+        var card = document.createElement('div');
+        card.className = 'image-playground-result';
+        var img = document.createElement('img');
+        img.src = normalizeAttachmentUrl(item);
+        img.alt = humanImageLabel(item);
+        img.onclick = function () { openImageLightbox(item); };
+        var meta = document.createElement('div');
+        meta.className = 'image-result-meta';
+        meta.textContent = item.id || item.filename || 'generated';
+        var actions = document.createElement('div');
+        actions.className = 'image-result-actions';
+        actions.appendChild(createImageActionButton('放大', function () { openImageLightbox(item); }));
+        actions.appendChild(createImageActionButton('复制图', function () { copyImageToClipboard(item); }));
+        actions.appendChild(createImageActionButton('复制ID', function () { copyTextToClipboard(item.id || '', '附件 ID 已复制'); }));
+        card.appendChild(img);
+        card.appendChild(meta);
+        card.appendChild(actions);
+        imagePlaygroundResults.prepend(card);
+      }
+
+      function runImagePlayground() {
+        if (!currentSessionId) {
+          appendLine('[image playground failed: no active session]', 'err-line');
+          return;
+        }
+        var prompt = String((imagePlaygroundPrompt && imagePlaygroundPrompt.value) || '').trim();
+        if (!prompt) {
+          setImagePlaygroundBusy(false, 'Prompt is required.');
+          return;
+        }
+        var mode = (imagePlaygroundMode && imagePlaygroundMode.value) || 'generate';
+        var refs = pendingImageAttachments();
+        if (mode === 'edit' && !refs.length) {
+          setImagePlaygroundBusy(false, 'Edit mode needs at least one pending image attachment.');
+          return;
+        }
+        var count = Math.max(1, Math.min(Number((imagePlaygroundCount && imagePlaygroundCount.value) || 1), 4));
+        var payload = {
+          prompt: prompt,
+          mode: mode,
+          size: (imagePlaygroundSize && imagePlaygroundSize.value) || '1024x1024',
+          quality: (imagePlaygroundQuality && imagePlaygroundQuality.value) || null,
+          output_format: 'png',
+          n: count,
+          input_attachment_ids: mode === 'edit' ? refs.map(function (x) { return x.id; }) : []
+        };
+        setImagePlaygroundBusy(true, mode + ' request running…');
+        fetch(API + '/sessions/' + encodeURIComponent(currentSessionId) + '/image-playground/' + mode, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+          .then(function (r) {
+            if (r.status === 401) {
+              location.href = '/terminal/login';
+              throw { detail: 'Terminal authentication required' };
+            }
+            if (!r.ok) {
+              return r.text().then(function (text) {
+                var detail = text || r.statusText || ('HTTP ' + r.status);
+                try {
+                  var parsed = JSON.parse(text || '{}');
+                  detail = parsed.detail || parsed.message || detail;
+                } catch (_) {}
+                throw { detail: detail, status: r.status };
+              });
+            }
+            return r.json();
+          })
+          .then(function (data) {
+            var attachments = data.attachments || [];
+            attachments.forEach(function (item) {
+              if (item.preview_url && item.preview_url.charAt(0) === '/') item.preview_url = item.preview_url;
+              pendingAttachments.push(item);
+              addImagePlaygroundResult(item);
+            });
+            renderAttachmentPreview();
+            setImagePlaygroundBusy(false, 'Generated ' + attachments.length + ' image(s), added to pending attachments.');
+          })
+          .catch(function (err) {
+            var detail = (err && (err.detail || err.message)) || 'network error';
+            setImagePlaygroundBusy(false, 'Failed: ' + detail);
+            appendLine('[image playground failed: ' + escapeHtml(detail) + ']', 'err-line');
+          });
+      }
+
+      if (imagePlaygroundClose) imagePlaygroundClose.onclick = closeImagePlayground;
+      if (imagePlaygroundModal) {
+        imagePlaygroundModal.addEventListener('click', function (e) { if (e.target === imagePlaygroundModal) closeImagePlayground(); });
+      }
+      if (imagePlaygroundMode) imagePlaygroundMode.onchange = updateImagePlaygroundSelection;
+      if (imagePlaygroundUsePending) imagePlaygroundUsePending.onclick = function () { if (imagePlaygroundMode) imagePlaygroundMode.value = 'edit'; updateImagePlaygroundSelection(); };
+      if (imagePlaygroundGenerate) imagePlaygroundGenerate.onclick = runImagePlayground;
+      if (imageLightboxClose) imageLightboxClose.onclick = closeImageLightbox;
+      if (imageLightbox) {
+        imageLightbox.addEventListener('click', function (e) { if (e.target === imageLightbox) closeImageLightbox(); });
+      }
+      if (imageLightboxCopyImage) imageLightboxCopyImage.onclick = function () { if (currentLightboxAttachment) copyImageToClipboard(currentLightboxAttachment); };
+      if (imageLightboxCopyLink) imageLightboxCopyLink.onclick = function () {
+        if (!currentLightboxAttachment) return;
+        var url = normalizeAttachmentUrl(currentLightboxAttachment);
+        copyTextToClipboard(absoluteImageUrl(url), isVideoAttachment(currentLightboxAttachment) ? '视频链接已复制' : '图片链接已复制');
+      };
+      if (imageLightboxCopyId) imageLightboxCopyId.onclick = function () {
+        copyTextToClipboard((currentLightboxAttachment && currentLightboxAttachment.id) || '', '附件 ID 已复制');
+      };
 
       function addCommandHistory(text) {
         text = String(text || '').trim();
@@ -1822,7 +2891,7 @@
 
       function removeInputRow() {
         hideSlashMenu();
-        if (inputRowEl) { inputRowEl.remove(); inputRowEl = null; inputEl = null; }
+        if (inputRowEl) { inputRowEl.remove(); inputRowEl = null; inputEl = null; fileInputEl = null; }
         termOutput.focus();
       }
 
@@ -1835,18 +2904,28 @@
         }
       }
 
-      function appendUserInput(text) {
-        appendLine('<span class="prompt">agent&gt;</span> ' + escapeHtml(text));
+      function appendUserInput(text, attachments) {
+        attachments = Array.isArray(attachments) ? attachments : [];
+        var suffix = attachments.length ? ' <span class="bash-meta">[' + attachments.length + ' media file(s)]</span>' : '';
+        var line = appendLine('<span class="prompt">agent&gt;</span> ' + escapeHtml(text || '') + suffix);
+        var gallery = renderGeneratedImageGallery(attachments);
+        if (gallery) line.appendChild(gallery);
       }
 
       // ── 流式 markdown ──
       function startMdBlock() {
         clearModelWaiting();
         if (currentMdEl) finalizeMdBlock();
+        var wrap = document.createElement('div');
+        wrap.className = 'md-message';
+        wrap.dataset.rawText = '';
         var div = document.createElement('div');
         div.className = 'md-block';
         div.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
-        appendBeforeInput(div);
+        wrap.appendChild(div);
+        wrap.appendChild(createMessageCopyButton(function () { return wrap.dataset.rawText || div.innerText || ''; }));
+        appendBeforeInput(wrap);
+        currentMdWrap = wrap;
         currentMdEl = div;
         currentTextBuffer = '';
         scrollBottom();
@@ -1855,6 +2934,7 @@
       function appendTextDelta(text) {
         if (!currentMdEl) startMdBlock();
         currentTextBuffer += text;
+        if (currentMdWrap) currentMdWrap.dataset.rawText = currentTextBuffer;
         currentMdEl.innerHTML = renderMarkdown(currentTextBuffer);
         highlightCodeBlocks(currentMdEl);
         scrollBottom();
@@ -1862,13 +2942,15 @@
 
       function finalizeMdBlock() {
         if (currentMdEl && currentTextBuffer) {
+          if (currentMdWrap) currentMdWrap.dataset.rawText = currentTextBuffer;
           currentMdEl.innerHTML = renderMarkdown(currentTextBuffer);
           highlightCodeBlocks(currentMdEl);
         } else if (currentMdEl) {
           // 没有收到任何文本 delta 时（例如 Ctrl+C 取消刚启动的请求），
           // startMdBlock() 放进去的三个加载点必须清掉，否则会一直停在界面上。
-          currentMdEl.remove();
+          (currentMdWrap || currentMdEl).remove();
         }
+        currentMdWrap = null;
         currentMdEl = null;
         currentTextBuffer = '';
       }
@@ -2010,7 +3092,7 @@
         var lineEl = card.querySelector('.term-line');
         lineEl.className = 'term-line ' + (isErr ? 'tool-err' : 'tool-ok');
         var brief = '';
-        if (isErr && resultText) {
+        if (resultText && (isErr || toolName === 'GenerateImage' || toolName === 'GenerateVideo')) {
           brief = resultText.split('\n')[0];
           if (brief.length > 120) brief = brief.slice(0, 120) + '...';
         }
@@ -2046,6 +3128,12 @@
         var detail = card.querySelector('.tool-detail');
         if (resultText && detail) {
           detail.textContent += (detail.textContent ? '\n' : '') + '→ ' + (resultText.length > 500 ? resultText.slice(0, 500) + '...' : resultText);
+        }
+
+        if (!isErr && (toolName === 'GenerateImage' || toolName === 'GenerateVideo') && metadata && Array.isArray(metadata.attachments)) {
+          card.querySelectorAll('.image-gallery').forEach(function (el) { el.remove(); });
+          var gallery = renderGeneratedImageGallery(metadata.attachments);
+          if (gallery) card.appendChild(gallery);
         }
       }
 
@@ -2092,6 +3180,23 @@
         appendBeforeInput(wrap);
         scrollBottom();
         return wrap;
+      }
+
+      function addHistoryToolResult(toolName, isErr, resultText, metadata) {
+        if (!metadata || !Array.isArray(metadata.attachments) || !metadata.attachments.length) return null;
+        var wrap = addToolLine(toolName || '?', null, isErr ? 'error' : 'ok', null);
+        setToolCardState(wrap, toolName || '?', !!isErr, resultText || '', metadata || {});
+        return wrap;
+      }
+
+      function updateGenericToolProgress(card, msg) {
+        if (!card) return;
+        var detail = card.querySelector('.tool-detail');
+        if (!detail) return;
+        var elapsed = msg.elapsedTimeSeconds !== undefined ? (' · ' + msg.elapsedTimeSeconds + 's') : '';
+        var text = (msg.message || 'Tool is still running') + elapsed;
+        detail.textContent = (detail.textContent || '').replace(/\n?\[progress\].*$/s, '');
+        detail.textContent += (detail.textContent ? '\n' : '') + '[progress] ' + text;
       }
 
       function escapeHtml(s) {
@@ -2192,7 +3297,7 @@
 
       // ── API ──
       function api(method, path, body) {
-        var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+        var opts = { method: method, headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
         if (body) opts.body = JSON.stringify(body);
         return fetch(API + path, opts).then(function (r) {
           if (r.status === 401) {
@@ -2201,6 +3306,227 @@
           }
           if (!r.ok) return r.json().then(function (e) { throw e; });
           return r.json();
+        });
+      }
+
+      function setChipState(valueEl, state) {
+        if (!valueEl) return;
+        var chip = valueEl.closest('.status-chip');
+        if (!chip) return;
+        chip.classList.remove('good', 'warn', 'bad', 'subtle');
+        if (state) chip.classList.add(state);
+      }
+
+      function summarizeQuota(quota) {
+        if (!quota || quota.enabled === false) return { text: 'off', state: 'subtle' };
+        var checks = Array.isArray(quota.checks) ? quota.checks.filter(function (c) { return Number(c.limit || 0) > 0; }) : [];
+        if (!checks.length) return { text: 'unlimited', state: 'good' };
+        checks.sort(function (a, b) {
+          var ar = Number(a.remaining == null ? a.limit : a.remaining) / Math.max(1, Number(a.limit || 1));
+          var br = Number(b.remaining == null ? b.limit : b.remaining) / Math.max(1, Number(b.limit || 1));
+          return ar - br;
+        });
+        var tight = checks[0];
+        var used = Number(tight.used || 0);
+        var limit = Number(tight.limit || 0);
+        var ratio = limit > 0 ? used / limit : 0;
+        var label = (tight.metric || 'quota') + '/' + (tight.window || 'window') + ' ' + used + '/' + limit;
+        return { text: label, state: ratio >= 0.9 ? 'bad' : (ratio >= 0.7 ? 'warn' : 'good') };
+      }
+
+      function selectedPromptTemplate(defaultName) {
+        var value = (promptTemplateSelect && promptTemplateSelect.value) || '';
+        if (!value || value === 'loading…') value = localStorage.getItem('terminalPromptTemplate') || '';
+        if (!value && promptTemplates.length && promptTemplates[0] && promptTemplates[0].name) value = promptTemplates[0].name;
+        return value || defaultName || 'default';
+      }
+
+      function renderPromptTemplateSelect(templates, current, defaultName) {
+        promptTemplates = Array.isArray(templates) ? templates : [];
+        if (!promptTemplateSelect) return;
+        var names = promptTemplates.map(function (item) { return item && item.name; }).filter(Boolean);
+        if (!names.length) names = [defaultName || 'default'];
+        current = current || localStorage.getItem('terminalPromptTemplate') || defaultName || names[0];
+        if (names.indexOf(current) < 0) names.unshift(current);
+        promptTemplateSelect.innerHTML = '';
+        names.forEach(function (name) {
+          var option = document.createElement('option');
+          option.value = name;
+          option.textContent = name;
+          promptTemplateSelect.appendChild(option);
+        });
+        promptTemplateSelect.value = current;
+        promptTemplateSelect.title = '当前 Prompt 模板：' + current;
+      }
+
+      function renderRuntimeStatus(cfg) {
+        cfg = cfg || {};
+        var provider = cfg.model_provider || 'unknown';
+        var model = cfg.model_id || 'unknown';
+        var codex = cfg.codex_credentials || {};
+        var quota = summarizeQuota(cfg.quota || null);
+        var user = cfg.user || {};
+        var org = cfg.organization || {};
+
+        statusModel.textContent = provider + ' / ' + model;
+        setChipState(statusModel, provider === 'fake' || provider.indexOf('fake') === 0 ? 'warn' : 'good');
+        renderPromptTemplateSelect(cfg.prompt_templates || [], cfg.prompt_template || cfg.default_prompt_template, cfg.default_prompt_template || 'default');
+
+        var imageModel = codex.image_model || 'default';
+        var imageReady = !!codex.image_configured;
+        statusImage.textContent = imageReady ? ((codex.configured ? 'codex ' : '') + imageModel) : 'not configured';
+        setChipState(statusImage, imageReady ? 'good' : 'warn');
+
+        if (codex.configured) {
+          statusCodex.textContent = (codex.provider_ready ? 'chat ready' : 'login only') + (codex.source ? ' · ' + codex.source : '');
+          setChipState(statusCodex, codex.provider_ready ? 'good' : 'warn');
+        } else {
+          statusCodex.textContent = 'off';
+          setChipState(statusCodex, 'subtle');
+        }
+
+        statusQuota.textContent = quota.text;
+        setChipState(statusQuota, quota.state);
+        if (cfg.context_window) contextWindowTokens = cfg.context_window;
+        statusUser.textContent = (user.id || 'local') + (org.id ? ' / ' + org.id : '');
+        statusSession.textContent = currentSessionId || 'none';
+
+        runtimeStatus.classList.remove('warn', 'error');
+        if (provider === 'fake' || provider.indexOf('fake') === 0 || (codex.configured && !codex.provider_ready)) runtimeStatus.classList.add('warn');
+        if (quota.state === 'bad') runtimeStatus.classList.add('error');
+      }
+
+      function loadRuntimeStatus() {
+        var path = '/config' + (currentSessionId ? ('?session_id=' + encodeURIComponent(currentSessionId)) : '');
+        return api('GET', path).then(function (cfg) {
+          renderRuntimeStatus(cfg);
+          return cfg;
+        }).catch(function (err) {
+          runtimeStatus.classList.remove('warn');
+          runtimeStatus.classList.add('error');
+          statusModel.textContent = 'config unavailable';
+          statusImage.textContent = '-';
+          statusCodex.textContent = (err && err.detail) || 'error';
+          statusQuota.textContent = '-';
+        });
+      }
+
+      function setCodexMessage(text, isError) {
+        codexMessage.textContent = text || '';
+        codexMessage.style.color = isError ? 'var(--red)' : 'var(--muted)';
+      }
+
+      function renderCodexStatus(status) {
+        status = status || { configured: false };
+        var connected = !!status.configured;
+        btnCodex.classList.toggle('connected', connected);
+        codexStatusCard.classList.toggle('connected', connected);
+        codexMenuState.textContent = connected ? '已连' : '未连';
+        codexStatusText.textContent = connected ? ('Connected · ' + (status.auth_mode || 'unknown')) : 'Disconnected';
+        codexSourceText.textContent = (status.source || (status.auth_file_exists ? 'file:auth.json detected' : 'none')) + (status.provider_ready ? '' : ' · chat未就绪');
+        codexBaseUrlText.textContent = status.base_url || '-';
+        codexModelText.textContent = (status.model || '-') + ' / image: ' + (status.image_model || '-');
+        if (codexBaseUrl && !codexBaseUrl.value) codexBaseUrl.value = status.base_url || 'http://localhost:8080/v1';
+        if (codexModel && !codexModel.value) codexModel.value = status.model || 'gpt-5.4';
+        if (codexImageModel && !codexImageModel.value) codexImageModel.value = status.image_model || 'gpt-image-2';
+      }
+
+      function loadCodexStatus() {
+        return api('GET', '/integrations/codex').then(function (status) {
+          renderCodexStatus(status);
+          return status;
+        }).catch(function (err) {
+          renderCodexStatus({ configured: false });
+          setCodexMessage((err && err.detail) || 'Codex 状态加载失败', true);
+        });
+      }
+
+      function renderCodexLoginStatus(status) {
+        status = status || {};
+        if (status.codex) renderCodexStatus(status.codex);
+        var lines = Array.isArray(status.output) ? status.output : [];
+        var head = status.running ? ('登录流程运行中：' + (status.flow || 'browser')) : '登录流程未运行';
+        if (status.configured) head = 'Codex 已登录 / 已配置';
+        if (status.return_code !== null && status.return_code !== undefined && !status.running) head += ' · exit=' + status.return_code;
+        codexLoginLogs.textContent = [head].concat(lines.length ? lines : ['暂无登录日志']).join('\n');
+        if (status.configured && status.provider_ready) setCodexMessage('已检测到 Codex API 凭证，可直接用于普通聊天。', false);
+        else if (status.configured) setCodexMessage('已检测到官方 Codex 登录态；普通聊天还需要 codex-proxy API Key，或设置 AGENT_CODEX_ALLOW_CHATGPT_TOKEN_PROVIDER=true 自担兼容风险。', true);
+      }
+
+      function pollCodexLogin() {
+        if (codexLoginPollTimer) clearTimeout(codexLoginPollTimer);
+        return api('GET', '/integrations/codex/login').then(function (status) {
+          renderCodexLoginStatus(status);
+          if (status.running && !status.configured) {
+            codexLoginPollTimer = setTimeout(pollCodexLogin, 1500);
+          }
+          return status;
+        }).catch(function (err) {
+          setCodexMessage((err && err.detail) || 'Codex 登录状态读取失败', true);
+        });
+      }
+
+      function startCodexLogin(flow) {
+        setCodexMessage(flow === 'device' ? '启动设备码登录…' : '启动 ChatGPT 浏览器登录…', false);
+        codexLoginLogs.textContent = '启动 codex login 中…';
+        return api('POST', '/integrations/codex/login', { flow: flow || 'browser' }).then(function (status) {
+          renderCodexLoginStatus(status);
+          if (flow === 'browser') setCodexMessage('请在弹出的浏览器完成 ChatGPT 登录；Codex 会通过 localhost:1455 回调。', false);
+          if (flow === 'device') setCodexMessage('请按日志中的设备码链接完成登录。', false);
+          return pollCodexLogin();
+        }).catch(function (err) {
+          setCodexMessage((err && err.detail) || '无法启动 Codex 登录；可改为手动粘贴 API Key。', true);
+        });
+      }
+
+      function openCodexModal() {
+        codexModal.classList.add('show');
+        codexModal.setAttribute('aria-hidden', 'false');
+        setCodexMessage('', false);
+        loadCodexStatus();
+        pollCodexLogin();
+        setTimeout(function () { codexSecret.focus(); }, 60);
+      }
+
+      function closeCodexModal() {
+        codexModal.classList.remove('show');
+        codexModal.setAttribute('aria-hidden', 'true');
+      }
+
+      function saveCodexCredentials() {
+        var secret = codexSecret.value.trim();
+        if (!secret) {
+          setCodexMessage('请粘贴 API Key、Access Token 或 auth.json', true);
+          return Promise.resolve(null);
+        }
+        setCodexMessage('保存 Codex 凭证中…', false);
+        return api('PUT', '/integrations/codex', {
+          secret: secret,
+          credential_type: codexCredentialType.value || 'api_key',
+          base_url: codexBaseUrl.value.trim() || 'http://localhost:8080/v1',
+          model: codexModel.value.trim() || 'gpt-5.4',
+          image_model: codexImageModel.value.trim() || 'gpt-image-2',
+          metadata: { source: 'terminal-ui' }
+        }).then(function (result) {
+          codexSecret.value = '';
+          renderCodexStatus(result.codex || { configured: true });
+          loadRuntimeStatus();
+          setCodexMessage('已保存。新建 session 或刷新运行时后会自动使用 codex provider。', false);
+          return result;
+        }).catch(function (err) {
+          setCodexMessage((err && err.detail) || 'Codex 保存失败', true);
+        });
+      }
+
+      function disconnectCodex() {
+        if (!confirm('清除 MyAgent 保存的 Codex 凭证？不会删除官方 ~/.codex/auth.json。')) return;
+        setCodexMessage('清除中…', false);
+        return api('DELETE', '/integrations/codex').then(function (result) {
+          renderCodexStatus(result.codex || { configured: false });
+          loadRuntimeStatus();
+          setCodexMessage('已清除应用内凭证', false);
+        }).catch(function (err) {
+          setCodexMessage((err && err.detail) || 'Codex 清除失败', true);
         });
       }
 
@@ -2406,7 +3732,9 @@
       }
 
       // ── Session ──
+      var isRenamingSession = false;
       function loadSessions() {
+        if (isRenamingSession) return;
         api('GET', '/sessions?limit=100').then(function (sessions) {
           sessionList.innerHTML = '';
           sessions.forEach(function (s) {
@@ -2421,7 +3749,8 @@
             var meta = document.createElement('div');
             meta.className = 'session-meta';
             var selectedModel = s.metadata && s.metadata.model_id ? ' · ' + s.metadata.model_id : '';
-            meta.textContent = (s.updated_at ? s.updated_at.slice(0, 19).replace('T', ' ') : '') + selectedModel;
+            var selectedPrompt = s.metadata && s.metadata.prompt_template ? ' · prompt:' + s.metadata.prompt_template : '';
+            meta.textContent = (s.updated_at ? s.updated_at.slice(0, 19).replace('T', ' ') : '') + selectedModel + selectedPrompt;
             var usage = document.createElement('div');
             usage.className = 'session-usage';
             usage.textContent = formatBillingSummary(s.billing);
@@ -2439,9 +3768,18 @@
                 loadSessions();
               });
             };
+            title.addEventListener('dblclick', function (e) {
+              e.stopPropagation();
+              triggerRename(title, s.id);
+            });
             div.appendChild(info);
             div.appendChild(del);
             div.onclick = function () { openSession(s.id); };
+            div.addEventListener('contextmenu', function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              showCtxMenu(e.clientX, e.clientY, s.id, title);
+            });
             sessionList.appendChild(div);
           });
         });
@@ -2456,6 +3794,8 @@
           el.classList.toggle('active', el.dataset.id === sessionId);
         });
         badge.style.display = 'flex';
+        if (statusSession) statusSession.textContent = currentSessionId;
+        loadRuntimeStatus();
         loadTasks();
         connectWS(sessionId, { replay: true });
       }
@@ -2466,25 +3806,55 @@
         if (ws) { ws.close(); ws = null; }
         currentSessionId = null;
         agentRunning = false;
+        if (statusSession) statusSession.textContent = 'none';
+        contextUsedTokens = 0;
+        statusContext.textContent = '-';
         stopAgentWatchdog();
         clearModelWaiting();
         termOutput.innerHTML = '';
         setTaskState([], '');
-        inputRowEl = null; inputEl = null; lineBuffer = '';
+        inputRowEl = null; inputEl = null; fileInputEl = null; lineBuffer = '';
+        pendingAttachments = [];
+        uploadingImages = 0;
       }
 
       btnNew.onclick = function () {
-        api('POST', '/sessions', { metadata: { title: 'New Session' } }).then(function (s) {
+        api('POST', '/sessions', { metadata: { title: 'New Session', prompt_template: selectedPromptTemplate('default') } }).then(function (s) {
           loadSessions();
           openSession(s.id);
         });
       };
+
+      if (promptTemplateSelect) {
+        promptTemplateSelect.onchange = function () {
+          var templateName = selectedPromptTemplate('default');
+          localStorage.setItem('terminalPromptTemplate', templateName);
+          if (!currentSessionId) return;
+          api('PUT', '/sessions/' + encodeURIComponent(currentSessionId) + '/config', { prompt_template: templateName }).then(function () {
+            appendLine('<span class="prompt">config&gt;</span> Prompt template switched to ' + escapeHtml(templateName));
+            loadSessions();
+            loadRuntimeStatus();
+          }).catch(function (err) {
+            appendLine('<span class="prompt">config&gt;</span> ' + escapeHtml((err && err.detail) || 'Prompt template switch failed'), 'err-line');
+            loadRuntimeStatus();
+          });
+        };
+      }
 
       btnLogout.onclick = function () {
         if (ws) ws.close();
         fetch('/terminal/logout', { method: 'POST' }).finally(function () { location.href = '/terminal/login'; });
       };
 
+      btnCodex.onclick = openCodexModal;
+      codexClose.onclick = closeCodexModal;
+      codexLoginBrowser.onclick = function () { startCodexLogin('browser'); };
+      codexLoginDevice.onclick = function () { startCodexLogin('device'); };
+      codexRefresh.onclick = function () { setCodexMessage('刷新中…', false); loadCodexStatus().then(function () { setCodexMessage('状态已刷新', false); }); };
+      codexSave.onclick = saveCodexCredentials;
+      codexDisconnect.onclick = disconnectCodex;
+      codexModal.addEventListener('click', function (e) { if (e.target === codexModal) closeCodexModal(); });
+      statusRefresh.onclick = function () { loadRuntimeStatus(); loadCodexStatus(); loadFeishuStatus(); };
       btnFeishu.onclick = openFeishuModal;
       feishuClose.onclick = closeFeishuModal;
       feishuRefresh.onclick = function () { setFeishuMessage('刷新中…', false); loadFeishuStatus().then(loadFeishuBridgeLogs).then(function () { setFeishuMessage('状态已刷新', false); }); };
@@ -2496,16 +3866,24 @@
       feishuDisconnect.onclick = disconnectFeishu;
       feishuModal.addEventListener('click', function (e) { if (e.target === feishuModal) closeFeishuModal(); });
       document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && codexModal.classList.contains('show')) closeCodexModal();
         if (e.key === 'Escape' && feishuModal.classList.contains('show')) closeFeishuModal();
+        if (e.key === 'Escape' && imageLightbox && imageLightbox.classList.contains('open')) closeImageLightbox();
+        if (e.key === 'Escape' && imagePlaygroundModal && imagePlaygroundModal.classList.contains('open')) closeImagePlayground();
       });
 
       // ── 终端键盘输入 ──
       // 点击终端区域自动聚焦
-      termOutput.addEventListener('click', function () { if (inputEl) inputEl.focus(); });
+      termOutput.addEventListener('click', function (e) {
+        if (isTerminalInteractiveClick(e.target)) return;
+        if (isSelectingText()) return;
+        focusInput({ preventScroll: true });
+      });
 
       termOutput.addEventListener('keydown', function (e) {
         // Ctrl+C：运行中立即取消；未运行时撤销当前输入行
         if (e.ctrlKey && e.key === 'c') {
+          if (isSelectingText() || (e.target && e.target.matches && e.target.matches('input, textarea, [contenteditable="true"]'))) return;
           e.preventDefault();
           if (agentRunning) {
             abortRunningTurn();
@@ -2565,7 +3943,12 @@
         if (e.key === 'Enter') {
           e.preventDefault();
           var text = inputEl.value.trim();
-          if (!text) return;
+          var attachmentsToSend = pendingAttachments.slice();
+          if (!text && !attachmentsToSend.length) return;
+          if (uploadingImages > 0) {
+            appendLine('[wait for image upload to finish]', 'err-line');
+            return;
+          }
           if (slashMenuEl) {
             var exact = slashCommands.some(function (c) { return c.name === text; });
             if (!exact || text === '/') {
@@ -2574,7 +3957,7 @@
             }
           }
           removeInputRow();
-          appendUserInput(text);
+          appendUserInput(text || 'Please inspect the attached media file(s).', attachmentsToSend);
           addCommandHistory(text);
           historyIndex = null;
           historyDraft = '';
@@ -2588,7 +3971,13 @@
             if (currentSessionId) scheduleReconnect(currentSessionId);
             return;
           }
-          ws.send(text);
+          if (attachmentsToSend.length) {
+            ws.send(JSON.stringify({ type: 'user_message', text: text, attachments: attachmentsToSend.map(function (a) { return { id: a.id, filename: a.filename, content_type: a.content_type, size_bytes: a.size_bytes }; }) }));
+          } else {
+            ws.send(text);
+          }
+          userScrolledUp = false;
+          pendingAttachments = [];
           lineBuffer = '';
           if (text.charAt(0) === '/') {
             createInputRow();
@@ -2620,12 +4009,46 @@
         updateSlashMenu();
       });
 
+      termOutput.addEventListener('paste', function (e) {
+        if (!inputEl || !e.clipboardData) return;
+        var files = [];
+        Array.prototype.forEach.call(e.clipboardData.items || [], function (item) {
+          if (item.kind === 'file') {
+            var file = item.getAsFile();
+            if (isSupportedMediaFile(file)) files.push(file);
+          }
+        });
+        Array.prototype.forEach.call(e.clipboardData.files || [], function (file) {
+          if (isSupportedMediaFile(file) && files.indexOf(file) === -1) files.push(file);
+        });
+        if (files.length) {
+          e.preventDefault();
+          uploadImageFiles(files);
+        }
+      });
+
+      termOutput.addEventListener('dragover', function (e) {
+        if (!inputRowEl) return;
+        e.preventDefault();
+        inputRowEl.classList.add('drag-over');
+      });
+      termOutput.addEventListener('dragleave', function () {
+        if (inputRowEl) inputRowEl.classList.remove('drag-over');
+      });
+      termOutput.addEventListener('drop', function (e) {
+        if (!inputRowEl) return;
+        e.preventDefault();
+        inputRowEl.classList.remove('drag-over');
+        uploadImageFiles(Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []));
+      });
+
       // ── WebSocket ──
       function resetTerminalForReplay() {
         termOutput.innerHTML = '';
         inputRowEl = null;
         inputEl = null;
         lineBuffer = '';
+        currentMdWrap = null;
         currentMdEl = null;
         currentTextBuffer = '';
         resetThinkingBlock();
@@ -2722,16 +4145,13 @@
 
           // ── 历史回放 ──
           if (type === 'history_user') {
-            appendUserInput(msg.text || '');
+            appendUserInput(msg.text || '', msg.attachments || []);
             addCommandHistory(msg.text || '');
             if (inputRowEl) termOutput.appendChild(inputRowEl);
           }
           else if (type === 'history_assistant') {
-            var div = document.createElement('div');
-            div.className = 'md-block';
-            div.innerHTML = renderMarkdown(msg.text || '');
-            highlightCodeBlocks(div);
-            termOutput.appendChild(div);
+            var message = createAssistantMessage(msg.text || '');
+            termOutput.appendChild(message.wrap);
             if (inputRowEl) termOutput.appendChild(inputRowEl);
           }
           else if (type === 'history_compact_summary') {
@@ -2745,11 +4165,19 @@
             if (inputRowEl) termOutput.appendChild(inputRowEl);
           }
           else if (type === 'history_tool_use') {
-            addToolLine(msg.tool || '?', msg.input, 'ok', null);
+            var historyCard = addToolLine(msg.tool || '?', msg.input, 'ok', null);
+            if (msg.tool_use_id) toolCards[msg.tool_use_id] = historyCard;
             if (inputRowEl) termOutput.appendChild(inputRowEl);
           }
           else if (type === 'history_tool_result') {
-            // skip
+            var historyResultCard = msg.tool_use_id ? toolCards[msg.tool_use_id] : null;
+            if (historyResultCard) {
+              setToolCardState(historyResultCard, msg.tool || '?', !!msg.is_error, msg.result || '', msg.metadata || {});
+              delete toolCards[msg.tool_use_id];
+            } else {
+              addHistoryToolResult(msg.tool || '?', !!msg.is_error, msg.result || '', msg.metadata || {});
+            }
+            if (inputRowEl) termOutput.appendChild(inputRowEl);
           }
           // ── 实时事件 ──
           else if (type === 'text_delta') {
@@ -2768,6 +4196,7 @@
           else if (type === 'model_completed') {
             clearModelWaiting();
             resetThinkingBlock();
+            if (msg.usage) updateContextUsage(msg.usage);
             if (msg.billing) loadSessions();
           }
           else if (type === 'tool_started') {
@@ -2779,18 +4208,25 @@
           else if (type === 'tool_progress') {
             var progressCard = toolCards[msg.tool_use_id];
             if (progressCard && isBashTool(msg.tool || 'bash')) updateBashProgress(progressCard, msg);
+            else if (progressCard) updateGenericToolProgress(progressCard, msg);
           }
           else if (type === 'tool_completed') {
             var card = toolCards[msg.tool_use_id];
+            var isErr = msg.is_error;
+            var toolName = msg.tool || '?';
+            var resultText = msg.result || '';
             if (card) {
-              var isErr = msg.is_error;
-              var toolName = msg.tool || '?';
-              var resultText = msg.result || '';
               setToolCardState(card, toolName, isErr, resultText, msg.metadata || {});
               if (!isErr && isTodoWrite(toolName)) {
                 setModelWaiting('next');
               }
               delete toolCards[msg.tool_use_id];
+            } else {
+              card = addToolLine(toolName, null, isErr ? 'error' : 'ok', null);
+              setToolCardState(card, toolName, isErr, resultText, msg.metadata || {});
+              if (!isErr && isTodoWrite(toolName)) {
+                setModelWaiting('next');
+              }
             }
             scrollBottom();
           }
@@ -2850,7 +4286,7 @@
             if (msg.clear_terminal) resetTerminalForReplay();
             appendCommandResult(msg.title, msg.content, false, msg);
             if (msg.companion) setCompanionState(msg.companion, msg.buddy_action || 'state');
-            if (msg.model_changed) loadSessions();
+            if (msg.model_changed) { loadSessions(); loadRuntimeStatus(); }
             if (!agentRunning && !inputRowEl) createInputRow();
           }
           else if (type === 'command_error') {
@@ -2921,9 +4357,84 @@
         }
       });
 
+      // ── Context Menu ──
+      var ctxMenu = document.getElementById('ctxMenu');
+      var ctxTargetSessionId = null;
+      var ctxTargetTitle = null;
+
+      function showCtxMenu(x, y, sessionId, titleEl) {
+        ctxTargetSessionId = sessionId;
+        ctxTargetTitle = titleEl;
+        ctxMenu.style.left = x + 'px';
+        ctxMenu.style.top = y + 'px';
+        ctxMenu.classList.add('show');
+      }
+      function hideCtxMenu() { ctxMenu.classList.remove('show'); }
+
+      document.addEventListener('click', hideCtxMenu);
+      document.addEventListener('contextmenu', function (e) {
+        if (!ctxMenu.contains(e.target)) hideCtxMenu();
+      });
+
+      ctxMenu.addEventListener('click', function (e) {
+        var action = e.target.dataset.action;
+        if (!action || !ctxTargetSessionId) return;
+        hideCtxMenu();
+        if (action === 'rename') {
+          triggerRename(ctxTargetTitle, ctxTargetSessionId);
+        } else if (action === 'delete') {
+          if (!confirm('Delete this session?')) return;
+          api('DELETE', '/sessions/' + encodeURIComponent(ctxTargetSessionId)).then(function () {
+            if (currentSessionId === ctxTargetSessionId) closeSession();
+            loadSessions();
+          });
+        }
+      });
+
+      function triggerRename(titleEl, sessionId) {
+        isRenamingSession = true;
+        var currentTitle = titleEl.textContent;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentTitle;
+        input.style.cssText = 'width:100%;background:rgba(0,0,0,.4);border:1px solid var(--line-strong);border-radius:4px;color:var(--text);font:inherit;font-size:12px;padding:2px 4px;outline:none;';
+        titleEl.textContent = '';
+        titleEl.appendChild(input);
+        input.focus();
+        input.select();
+        var committed = false;
+        function commit() {
+          if (committed) return;
+          committed = true;
+          var val = input.value.trim();
+          titleEl.textContent = val || currentTitle;
+          if (val && val !== currentTitle) {
+            api('PUT', '/sessions/' + encodeURIComponent(sessionId) + '/config', { title: val }).then(function () {
+              isRenamingSession = false;
+              loadSessions();
+            }).catch(function (err) {
+              isRenamingSession = false;
+              titleEl.textContent = currentTitle;
+              console.error('Rename failed:', err);
+              loadSessions();
+            });
+          } else {
+            isRenamingSession = false;
+          }
+        }
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+          if (ev.key === 'Escape') { isRenamingSession = false; titleEl.textContent = currentTitle; }
+        });
+      }
+
       // ── Init ──
+      loadRuntimeStatus();
+      loadCodexStatus();
       loadFeishuStatus();
       loadSessions();
+      setInterval(loadRuntimeStatus, 10000);
       setInterval(loadSessions, 5000);
     })();
     </script>

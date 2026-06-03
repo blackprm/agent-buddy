@@ -33,7 +33,10 @@ def serialize_block(block: ContentBlock) -> dict[str, Any]:
     elif isinstance(block, ToolUseBlock):
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
     elif isinstance(block, ToolResultBlock):
-        return {"type": "tool_result", "tool_use_id": block.tool_use_id, "content": block.content, "is_error": block.is_error}
+        data = {"type": "tool_result", "tool_use_id": block.tool_use_id, "content": block.content, "is_error": block.is_error}
+        if block.metadata:
+            data["metadata"] = block.metadata
+        return data
     return {"type": "unknown", "data": str(block)}
 
 
@@ -47,7 +50,7 @@ def deserialize_block(d: dict[str, Any]) -> ContentBlock:
     elif t == "tool_use":
         return ToolUseBlock(id=d["id"], name=d["name"], input=d.get("input", {}))
     elif t == "tool_result":
-        return ToolResultBlock(tool_use_id=d["tool_use_id"], content=d["content"], is_error=d.get("is_error", False))
+        return ToolResultBlock(tool_use_id=d["tool_use_id"], content=d["content"], is_error=d.get("is_error", False), metadata=d.get("metadata") or {})
     return TextBlock(text=json.dumps(d, ensure_ascii=False))
 
 
@@ -141,6 +144,7 @@ def create_session_store(store_type: str = "sqlite", **kwargs: Any) -> SessionSt
     环境变量:
         SESSION_STORE_TYPE: 覆盖 store_type 参数
         SESSION_STORE_URL: 连接字符串（如 mysql://...），传给实现类
+        SESSION_STORE_PATH: SQLite 数据库文件路径（未设置 SESSION_STORE_URL 时生效）
     """
     import os
 
@@ -158,10 +162,14 @@ def create_session_store(store_type: str = "sqlite", **kwargs: Any) -> SessionSt
             f"Set SESSION_STORE_TYPE or register via register_session_store()."
         )
 
-    # 如果传了 url 参数或环境变量，注入到 kwargs
+    # 如果传了 url/path 参数或环境变量，注入到 kwargs
     url = kwargs.pop("url", None) or os.getenv("SESSION_STORE_URL")
     if url:
         kwargs["url"] = url
+    elif "db_path" not in kwargs:
+        db_path = os.getenv("SESSION_STORE_PATH")
+        if db_path:
+            kwargs["db_path"] = db_path
 
     return cls(**kwargs)
 

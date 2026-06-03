@@ -5,13 +5,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from agent_core.session.store import SessionStore, serialize_message, deserialize_message
+from agent_core.sqlite_utils import connect_sqlite
 from agent_core.types import Message
 
 
@@ -31,21 +34,24 @@ class SQLiteSessionStore:
 
     def __init__(self, db_path: str | Path | None = None, *, url: str | None = None) -> None:
         if url:
-            # 支持 sqlite:///path/to/db 格式
-            if url.startswith("sqlite:///"):
-                db_path = url[len("sqlite:///"):]
-            else:
-                db_path = url
+            db_path = _path_from_sqlite_url(url)
         if db_path is None:
             _DEFAULT_DB_DIR.mkdir(parents=True, exist_ok=True)
             db_path = _DEFAULT_DB_DIR / "sessions.db"
-        self._db_path = str(db_path)
+        self._db_path = _normalize_db_path(db_path)
+        if self._db_path != ":memory:":
+            db_file = Path(self._db_path)
+            db_file.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            conn = connect_sqlite(
+                self._db_path,
+                pragmas=("PRAGMA journal_mode=WAL", "PRAGMA foreign_keys=ON"),
+            )
+        except sqlite3.OperationalError as exc:
+            raise sqlite3.OperationalError(_format_sqlite_open_error(self._db_path, exc)) from exc
         return conn
 
     def _init_db(self) -> None:
@@ -207,3 +213,49 @@ class SQLiteSessionStore:
                 "UPDATE session SET metadata = ?, updated_at = ? WHERE id = ?",
                 (meta_json, now, session_id),
             )
+
+
+def _path_from_sqlite_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if raw in {":memory:", "sqlite:///:memory:", "sqlite://:memory:", "sqlite::memory:"}:
+        return ":memory:"
+    if raw.startswith("sqlite:///"):
+        # Keep backwards-compatible relative URL handling:
+        #   sqlite:///data/sessions.db  -> data/sessions.db
+        #   sqlite:////tmp/sessions.db  -> /tmp/sessions.db
+        path = raw[len("sqlite:///"):]
+    elif raw.startswith("sqlite://"):
+        # Be liberal for accidentally configured sqlite://relative/path and
+        # sqlite://localhost/absolute/path values instead of passing the whole
+        # URL string to sqlite3, which produces the opaque "unable to open".
+        path = raw[len("sqlite://"):]
+        if path.startswith("localhost/"):
+            path = "/" + path[len("localhost/"):]
+    elif raw.startswith("sqlite:"):
+        path = raw[len("sqlite:"):]
+    else:
+        path = raw
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    return unquote(path) or ":memory:"
+
+
+def _normalize_db_path(db_path: str | Path) -> str:
+    if str(db_path) == ":memory:":
+        return ":memory:"
+    path = Path(db_path).expanduser()
+    if path.exists() and path.is_dir():
+        path = path / "sessions.db"
+    return str(path if path.is_absolute() else path.resolve(strict=False))
+
+
+def _format_sqlite_open_error(db_path: str, exc: sqlite3.OperationalError) -> str:
+    db_file = Path(db_path) if db_path != ":memory:" else None
+    parent = db_file.parent if db_file is not None else None
+    parent_exists = bool(parent and parent.exists())
+    parent_is_dir = bool(parent and parent.is_dir())
+    parent_writable = bool(parent and parent.exists() and os.access(parent, os.W_OK))
+    return (
+        f"unable to open SQLite session database at {db_path!r}: {exc}. "
+        f"cwd={os.getcwd()!r}, parent={str(parent) if parent else None!r}, "
+        f"parent_exists={parent_exists}, parent_is_dir={parent_is_dir}, parent_writable={parent_writable}"
+    )

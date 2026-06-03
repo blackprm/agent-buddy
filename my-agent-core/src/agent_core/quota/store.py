@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from agent_core.sqlite_utils import connect_sqlite
+
 
 _DEFAULT_DB_DIR = Path.home() / ".my-agent-core"
 
@@ -45,10 +47,7 @@ class QuotaStore:
         return os.getenv("AGENT_QUOTA_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        return connect_sqlite(self._db_path, row_factory=sqlite3.Row, pragmas=("PRAGMA journal_mode=WAL",))
 
     def _init_db(self) -> None:
         with self._connect() as conn:

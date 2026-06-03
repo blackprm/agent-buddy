@@ -19,6 +19,7 @@ AgentEventType = Literal[
     "permission_request",
     "permission_result",
     "plan_implementation_started",
+    "team_state",
     "agent_status",
     "context_compacting",
     "context_compacted",

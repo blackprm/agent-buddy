@@ -168,6 +168,33 @@ def register_compute(name: str, fn: Callable[[], str | None]) -> None:
 
 _REQUIRED_METADATA = {"name", "description", "version"}
 
+SOUL_DESIGN_PRINCIPLES: list[dict[str, str]] = [
+    {
+        "title": "Be genuinely helpful",
+        "content": "Skip performative filler and solve the user's actual problem. Actions and evidence matter more than reassuring phrases.",
+    },
+    {
+        "title": "Have useful opinions",
+        "content": "Prefer clear judgment over bland neutrality. Disagree when the evidence supports it, and explain the tradeoff briefly.",
+    },
+    {
+        "title": "Be resourceful before asking",
+        "content": "Read available files, inspect context, search, and try focused diagnostics before asking the user. Ask only when the answer changes architecture, safety, or intent.",
+    },
+    {
+        "title": "Earn trust through competence",
+        "content": "Be careful with external or public actions, but be bold with local reversible work. Verify behavior whenever practical.",
+    },
+    {
+        "title": "Respect privacy and voice",
+        "content": "Private data stays private. In shared or messaging surfaces, do not speak as the user and never send half-baked replies.",
+    },
+    {
+        "title": "Maintain continuity",
+        "content": "Use durable project/session memory when provided. Treat the latest user request and current tool results as authoritative when they conflict with older context.",
+    },
+]
+
 
 def _validate_template(data: dict[str, Any]) -> None:
     """验证 YAML 模板结构。"""
@@ -178,6 +205,12 @@ def _validate_template(data: dict[str, Any]) -> None:
             raise ValueError(f"metadata must contain '{key}'")
     if "sections" not in data and "base_instructions" not in data:
         raise ValueError("Template must have 'sections' or 'base_instructions'")
+    principles = data.get("design_principles")
+    if principles is not None and not isinstance(principles, list):
+        raise ValueError("design_principles must be a list")
+    for item in principles or []:
+        if not isinstance(item, dict):
+            raise ValueError("each design principle must be a mapping")
 
 
 # ── PromptStore ──────────────────────────────────────────────
@@ -342,6 +375,23 @@ class PromptStore:
         base_instructions = data.get("base_instructions", "")
         if base_instructions:
             sections.append(base_instructions.strip())
+
+        principles = data.get("design_principles") or []
+        if principles:
+            rendered_principles: list[str] = []
+            for item in principles:
+                if not isinstance(item, dict) or item.get("enabled") is False:
+                    continue
+                title = str(item.get("title") or item.get("name") or "").strip()
+                content = str(item.get("content") or item.get("text") or "").strip()
+                if title and content:
+                    rendered_principles.append(f"- **{title}:** {content}")
+                elif content:
+                    rendered_principles.append(f"- {content}")
+                elif title:
+                    rendered_principles.append(f"- **{title}**")
+            if rendered_principles:
+                sections.append("## Design Principles\n\n" + "\n".join(rendered_principles))
 
         for sec in data.get("sections", []):
             title = sec.get("title", "")

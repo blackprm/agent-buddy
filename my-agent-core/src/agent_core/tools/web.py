@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable
 
+from agent_core.recovery.tool_errors import format_exception_detail
 from agent_core.tools.base import ToolContext, ToolResult
 
 
@@ -94,7 +95,7 @@ WebFetch again for the new host."""
             else:
                 page_or_redirect = await asyncio.to_thread(_fetch_with_permitted_redirects, url)
         except Exception as exc:
-            return ToolResult(content=f"WebFetch failed for {url}: {exc}", is_error=True, metadata={"url": url})
+            return ToolResult(content=f"WebFetch failed for {url}:\n{format_exception_detail(exc)}", is_error=True, metadata={"url": url, "error_type": type(exc).__name__})
 
         duration_ms = int((time.perf_counter() - start) * 1000)
         if isinstance(page_or_redirect, _RedirectInfo):
@@ -187,7 +188,7 @@ After using WebSearch, cite relevant result URLs in the final answer."""
             else:
                 results = await asyncio.to_thread(_default_web_search, query, allowed, blocked)
         except Exception as exc:
-            return ToolResult(content=f"WebSearch failed for query {query!r}: {exc}", is_error=True, metadata={"query": query})
+            return ToolResult(content=f"WebSearch failed for query {query!r}:\n{format_exception_detail(exc)}", is_error=True, metadata={"query": query, "error_type": type(exc).__name__})
 
         filtered = _filter_search_results(results, allowed, blocked)
         duration_seconds = round(time.perf_counter() - start, 3)

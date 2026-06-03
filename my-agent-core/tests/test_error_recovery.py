@@ -5,11 +5,38 @@ from typing import Any, AsyncIterator
 import pytest
 
 from agent_core.core.agent import AgentRuntime, AgentRuntimeConfig
+from agent_core.context.compact import AutoCompactConfig
 from agent_core.model.base import ModelClient, ModelResponse, StreamDelta
 from agent_core.model.retry import stream_with_retries
 from agent_core.recovery import ensure_tool_result_pairing, recover_messages_for_resume
 from agent_core.tools.base import ToolContext, ToolRegistry, ToolResult, execute_tools_serially
 from agent_core.types import Message, TextBlock, ToolResultBlock, ToolUseBlock
+
+
+def test_model_stream_idle_timeout_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_MODEL_STREAM_IDLE_TIMEOUT_SECONDS", "43200")
+
+    config = AgentRuntimeConfig()
+
+    assert config.model_stream_idle_timeout_seconds == 43200
+
+
+def test_compact_stream_idle_timeout_reuses_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENT_COMPACT_STREAM_IDLE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("AGENT_MODEL_STREAM_IDLE_TIMEOUT_SECONDS", "21600")
+
+    config = AutoCompactConfig()
+
+    assert config.compact_stream_idle_timeout_seconds == 21600
+
+
+def test_compact_stream_idle_timeout_has_specific_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_MODEL_STREAM_IDLE_TIMEOUT_SECONDS", "21600")
+    monkeypatch.setenv("AGENT_COMPACT_STREAM_IDLE_TIMEOUT_SECONDS", "7200")
+
+    config = AutoCompactConfig()
+
+    assert config.compact_stream_idle_timeout_seconds == 7200
 
 
 def test_conversation_repair_inserts_missing_tool_result() -> None:

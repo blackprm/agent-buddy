@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from agent_core.sqlite_utils import connect_sqlite
 from agent_core.tools.base import ToolContext, ToolResult
 
 
@@ -66,10 +67,7 @@ class FeishuTokenStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        return connect_sqlite(self._db_path, row_factory=sqlite3.Row, pragmas=("PRAGMA journal_mode=WAL",))
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -219,6 +217,24 @@ class FeishuTokenStore:
                 (str(user_id or ""), str(org_id or "")),
             ).fetchone()
         return _token_row_to_dict(row, include_secret=include_secret)
+
+    def update_metadata(self, *, user_id: str, org_id: str = "", metadata: dict[str, Any]) -> dict[str, Any] | None:
+        token = self.get_user_token(user_id=user_id, org_id=org_id, include_secret=False)
+        if token is None:
+            return None
+        merged = {**dict(token.get("metadata") or {}), **dict(metadata or {})}
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE feishu_user_tokens SET metadata = ?, updated_at = ? WHERE user_id = ? AND org_id = ?",
+                (json.dumps(merged, ensure_ascii=False), now, str(user_id or ""), str(org_id or "")),
+            )
+        return self.get_user_token(user_id=user_id, org_id=org_id, include_secret=False)
+
+    def list_tokens(self, *, include_secret: bool = False) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM feishu_user_tokens ORDER BY updated_at DESC").fetchall()
+        return [_token_row_to_dict(row, include_secret=include_secret) for row in rows if row is not None]
 
     def delete_user_token(self, *, user_id: str, org_id: str = "") -> bool:
         with self._connect() as conn:
